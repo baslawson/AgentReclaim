@@ -55,6 +55,8 @@
             <TabControl.Resources>
                 <!-- Fluent's tab headers have a large fixed width; these size to their text. -->
                 <Style TargetType="TabItem">
+                    <!-- Not based on Fluent's style, so the theme's text colour has to be set here (the tab content inherits it too). -->
+                    <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
                     <Setter Property="Template">
                         <Setter.Value>
                             <ControlTemplate TargetType="TabItem">
