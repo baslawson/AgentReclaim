@@ -9,7 +9,9 @@
     <!-- Only for NotifyIcon; WPF has no tray icon of its own. -->
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>AgentReclaim</AssemblyName>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
+    <!-- Explorer, taskbar and Alt+Tab icon; regenerate with build/make-icon.ps1. -->
+    <ApplicationIcon>Assets/AgentReclaim.ico</ApplicationIcon>
     <!-- Program.Main handles the `hook` and `mcp` command-line modes before any WPF starts. -->
     <StartupObject>AgentReclaim.App.Program</StartupObject>
   </PropertyGroup>
@@ -17,6 +19,7 @@
   <ItemGroup>
     <ApplicationDefinition Remove="App.xaml" />
     <Page Include="App.xaml" />
+    <Resource Include="Assets/AgentReclaim.ico" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,3 +1,5 @@
+<img src="src/AgentReclaim.App/Assets/AgentReclaim-256.png" alt="" width="96" align="right">
+
 # AgentReclaim
 
 A Windows tray app that watches what AI coding tools (Claude Code, Codex) are running, finds what they leave behind, and frees it safely.
@@ -84,6 +86,7 @@ For testing: `AGENTRECLAIM_DATA_DIR` moves the data folder, and `AGENTRECLAIM_UP
 | `src/AgentReclaim.App` | WPF window, tray icon, background monitor, entry point |
 | `tests/AgentReclaim.Core.Tests` | 79 tests: analyzer, safety, auto rules, leaks, config editing, MCP, logging, updates, Codex-review regressions, live-machine checks |
 | `build/publish.ps1` | Release build |
+| `build/make-icon.ps1` | Draws the app icon (`src/AgentReclaim.App/Assets`) |
 
 ## Not done yet
 

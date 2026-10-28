@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="AgentReclaim" Width="1150" Height="720" MinWidth="760" MinHeight="480"
         Background="White" FontFamily="Segoe UI" FontSize="13"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen" Icon="pack://application:,,,/AgentReclaim;component/Assets/AgentReclaim.ico">
     <DockPanel Margin="16">
         <!-- Stat tiles -->
         <UniformGrid DockPanel.Dock="Top" Rows="1" Margin="0,0,-10,14">
