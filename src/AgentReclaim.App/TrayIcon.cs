@@ -15,14 +15,23 @@ internal sealed class TrayIcon : IDisposable
     private readonly NotifyIcon _icon;
     private readonly Dictionary<(int Bucket, bool Leftovers), Icon> _icons = new();
     private (int Bucket, bool Leftovers)? _shown;
+    private readonly ToolStripMenuItem _freeSafe;
+    private readonly ToolStripMenuItem _pause;
 
-    public TrayIcon(Action open, Action<bool> setPaused, Action checkForUpdates, Action exit)
+    public TrayIcon(Action open, Action<bool> setPaused, Action freeSafeLeftovers, Action checkForUpdates, Action exit)
     {
-        var pause = new ToolStripMenuItem("Pause monitoring") { CheckOnClick = true };
-        pause.CheckedChanged += (_, _) => setPaused(pause.Checked);
+        var pause = _pause = new ToolStripMenuItem("Pause monitoring") { CheckOnClick = true };
+        pause.CheckedChanged += (_, _) =>
+        {
+            setPaused(pause.Checked);
+            _freeSafe!.Enabled = false; // re-enabled by the next poll once monitoring runs again
+        };
+        _freeSafe = new ToolStripMenuItem("Free safe leftovers…") { Enabled = false };
+        _freeSafe.Click += (_, _) => freeSafeLeftovers();
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open AgentReclaim", null, (_, _) => open());
+        menu.Items.Add(_freeSafe);
         menu.Items.Add(pause);
         menu.Items.Add("Open data folder", null, (_, _) => OpenDataFolder());
         menu.Items.Add("Check for updates", null, (_, _) => checkForUpdates());
@@ -40,8 +49,13 @@ internal sealed class TrayIcon : IDisposable
         _icon.BalloonTipClicked += (_, _) => open();
     }
 
-    public void Update(AnalysisResult result)
+    public void Update(AnalysisResult result, IReadOnlyList<OrphanTree> safeLeftovers)
     {
+        _freeSafe.Enabled = safeLeftovers.Count > 0 && !_pause.Checked;
+        _freeSafe.Text = safeLeftovers.Count > 0
+            ? $"Free safe leftovers ({safeLeftovers.Count}, {Format.Bytes(safeLeftovers.Sum(t => t.Root.TotalPrivateBytes))})…"
+            : "Free safe leftovers (none right now)";
+
         var system = result.Snapshot.System;
         var state = ((int)Math.Round(system.MemoryLoad * 10), result.Orphans.Count > 0);
         if (_shown != state)

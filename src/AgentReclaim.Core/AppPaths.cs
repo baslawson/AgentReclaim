@@ -16,6 +16,7 @@ public static class AppPaths
     public static string LineageFile => Path.Combine(DataDirectory, "lineage.json");
     public static string ActionLogFile => Path.Combine(DataDirectory, "actions.jsonl");
     public static string SettingsFile => Path.Combine(DataDirectory, "settings.json");
+    public static string HistoryFile => Path.Combine(DataDirectory, "history.json");
 
     /// <summary>
     /// Empty normally. With AGENTRECLAIM_DATA_DIR set, a suffix derived from it, so an isolated test

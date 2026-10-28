@@ -41,10 +41,16 @@ public sealed class AutoRuleEngine
     /// Leftovers eligible right now, best first. The caller should stop at most one per fresh snapshot:
     /// each stop takes time, and the rest of the plan goes stale meanwhile.
     /// </summary>
-    public IReadOnlyList<OrphanTree> LeftoversToStop(AnalysisResult result, AppSettings settings, int selfPid)
-    {
-        if (!settings.AutoStopLeftovers) return [];
+    public IReadOnlyList<OrphanTree> LeftoversToStop(AnalysisResult result, AppSettings settings, int selfPid) =>
+        settings.AutoStopLeftovers ? SafeLeftovers(result, settings, selfPid, skipAttempted: true) : [];
 
+    /// <summary>
+    /// Leftovers that pass every auto-stop check (owner seen, idle long enough, no connections, allowed by
+    /// the safety policy), whether or not automatic stopping is on. The tray's "Free safe leftovers" uses this.
+    /// </summary>
+    /// <param name="skipAttempted">Leave out trees an automatic stop already tried.</param>
+    public IReadOnlyList<OrphanTree> SafeLeftovers(AnalysisResult result, AppSettings settings, int selfPid, bool skipAttempted = false)
+    {
         // Without connection data we can't tell a leftover from a server someone is using.
         if (!result.Snapshot.NetworkComplete) return [];
 
@@ -56,7 +62,7 @@ public sealed class AutoRuleEngine
         {
             // Only leftovers we actually saw under an agent. Guessed owners always need a human.
             if (tree.Attribution != Attribution.Observed) continue;
-            if (_attemptedStops.Contains(tree.Root.Process.Key)) continue;
+            if (skipAttempted && _attemptedStops.Contains(tree.Root.Process.Key)) continue;
 
             var nodes = tree.Root.SelfAndDescendants().Select(x => x.Node).ToList();
             if (nodes.Sum(n => n.Process.EstablishedConnections) > 0) continue; // something is talking to it

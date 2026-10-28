@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using AgentReclaim.Core.Actions;
+using AgentReclaim.Core.Analysis;
 using AgentReclaim.Core.Cleanup;
 using AgentReclaim.Core.Integration;
 using AgentReclaim.Core.Settings;
@@ -24,6 +25,29 @@ public sealed class CleanupRow(CleanupTarget target) : Row<CleanupTarget>(target
         CleanupMethod.RecycleFolders => "To Recycle Bin",
         CleanupMethod.ToolCommand => "Tool's own clean command",
         CleanupMethod.GitWorktreeRemove => "git worktree remove",
+        _ => "",
+    };
+}
+
+/// <summary>A running container, tied to an AI project by its compose folder when it can be.</summary>
+public sealed class ContainerRow(ContainerInfo info, string? project, ContainerLink link)
+{
+    public ContainerInfo Info { get; } = info;
+    public string? ProjectPath { get; } = project;
+    public ContainerLink Link { get; } = link;
+    public string Name => Info.Name;
+    public string Image => Info.Image;
+    public string Memory => Info.MemoryBytes > 0 ? Format.Bytes(Info.MemoryBytes) : "–";
+    public string Ports => string.Join(", ", Info.Ports.Take(3)) + (Info.Ports.Count > 3 ? ", …" : "");
+    public string Folder => Info.WorkingDirectory ?? "(not started by docker compose)";
+    public string Note => Info.AutoRemove ? "Deleted when stopped (--rm)" : "";
+    public string Running => Info.StartedAtUtc is { } at ? Format.Duration(DateTime.UtcNow - at) : "";
+
+    public string Ai => Link switch
+    {
+        ContainerLink.LiveSession => $"Agent working in {ProjectResolver.DisplayName(ProjectPath)}",
+        ContainerLink.Leftover => $"{ProjectResolver.DisplayName(ProjectPath)} has leftovers",
+        ContainerLink.RecentActivity => $"Agent worked in {ProjectResolver.DisplayName(ProjectPath)} today",
         _ => "",
     };
 }
@@ -66,6 +90,33 @@ public sealed class CleanupViewModel : ObservableObject
         ScanStatus = targets.Count == 0
             ? "Nothing to clean up."
             : $"Found {targets.Count} item(s), {Format.Bytes(targets.Sum(t => t.SizeBytes))} in total.";
+    }
+
+    // ---- Docker containers ----
+
+    private string _dockerSummary = "Refresh to list running containers.";
+
+    public ObservableCollection<ContainerRow> Containers { get; } = [];
+    public string DockerSummary { get => _dockerSummary; set { _dockerSummary = value; Raise(); } }
+    public bool HasContainers => Containers.Count > 0;
+
+    public void SetContainers(ContainerList list, IReadOnlyList<ProjectSummary> live, IEnumerable<string> recent)
+    {
+        Containers.Clear();
+        var recentList = recent.ToList();
+        var rows = list.Containers
+            .Select(c => (Info: c, Relation: DockerContainers.Relate(c, live, recentList)))
+            .OrderBy(x => x.Relation.Link == ContainerLink.None)
+            .ThenByDescending(x => x.Info.MemoryBytes)
+            .Select(x => new ContainerRow(x.Info, x.Relation.Project, x.Relation.Link));
+        foreach (var row in rows) Containers.Add(row);
+
+        var ai = Containers.Count(c => c.Link != ContainerLink.None);
+        DockerSummary = list.Error ?? (Containers.Count == 0
+            ? "No containers running."
+            : $"{Containers.Count} running, {Format.Bytes(Containers.Sum(c => c.Info.MemoryBytes))} in all. " +
+              $"{ai} in a folder an AI agent is working in or worked in today (listed first).");
+        Raise(nameof(HasContainers));
     }
 }
 
@@ -122,6 +173,14 @@ public sealed class SettingsViewModel(AppSettings settings, Action<AppSettings> 
     public bool LowMemoryAlerts { get => settings.LowMemoryAlerts; set => Set(() => settings.LowMemoryAlerts = value); }
     public int LowMemoryAlertPercent { get => settings.LowMemoryAlertPercent; set => Set(() => settings.LowMemoryAlertPercent = Math.Clamp(value, 50, 99)); }
     public bool AllowAgentSelfStop { get => settings.AllowAgentSelfStop; set => Set(() => settings.AllowAgentSelfStop = value); }
+    public bool NotifyNewLeftovers { get => settings.NotifyNewLeftovers; set => Set(() => settings.NotifyNewLeftovers = value); }
+    public bool CapSessionMemory { get => settings.CapSessionMemory; set => Set(() => settings.CapSessionMemory = value); }
+
+    public int SessionMemoryCapGb
+    {
+        get => settings.SessionMemoryCapGb;
+        set => Set(() => settings.SessionMemoryCapGb = Math.Clamp(value, Core.Actions.SessionMemoryCaps.MinimumGb, Core.Actions.SessionMemoryCaps.MaximumGb));
+    }
 
     public AppSettings Current => settings;
 
@@ -174,5 +233,76 @@ public sealed class SettingsViewModel(AppSettings settings, Action<AppSettings> 
         apply();
         publish(settings.Clone());
         Raise(name);
+    }
+}
+
+/// <summary>A project on the history chart (also the chart's table view).</summary>
+public sealed class ProjectHistoryRow(string name, string path, string? brushKey, long now, long peak)
+{
+    public string Name => name;
+    public string Path => path;
+    public string? BrushKey => brushKey;
+    public bool OnChart => brushKey is not null;
+    public string Now => now > 0 ? Format.Bytes(now) : "–";
+    public string Peak => Format.Bytes(peak);
+}
+
+/// <summary>The History tab: AI-tool memory over the last day, per project, and what was freed.</summary>
+public sealed class HistoryViewModel : ObservableObject
+{
+    private static readonly string[] Slots = ["Series1", "Series2", "Series3", "Series4"];
+    private readonly Dictionary<string, string> _slotOf = new(StringComparer.OrdinalIgnoreCase);
+    private string _freedToday = "";
+    private string _freedAllTime = "";
+
+    public ObservableCollection<ProjectHistoryRow> Projects { get; } = [];
+    public IReadOnlyList<DateTime> Times { get; private set; } = [];
+    public IReadOnlyList<ChartSeries> Series { get; private set; } = [];
+    public IReadOnlyList<ProjectHistoryRow> OnChart { get; private set; } = [];
+    public string FreedToday { get => _freedToday; private set { _freedToday = value; Raise(); } }
+    public string FreedAllTime { get => _freedAllTime; private set { _freedAllTime = value; Raise(); } }
+
+    public void Update(IReadOnlyList<HistorySample> samples, IReadOnlyList<ActionLogEntry> log, DateTime nowUtc)
+    {
+        Times = samples.Select(s => s.TimeUtc.ToLocalTime()).ToList();
+
+        // The four projects with the highest peak get a line. A project keeps its colour while it stays in
+        // the top four, so a change in ranking doesn't repaint the others.
+        var peaks = samples.SelectMany(s => s.Projects)
+            .GroupBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (Path: g.Key, Peak: g.Max(x => x.Value)))
+            .OrderByDescending(x => x.Peak)
+            .ToList();
+        var top = peaks.Take(Slots.Length).Select(p => p.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var gone in _slotOf.Keys.Where(k => !top.Contains(k)).ToList()) _slotOf.Remove(gone);
+        foreach (var path in top.Where(p => !_slotOf.ContainsKey(p)))
+            _slotOf[path] = Slots.First(s => !_slotOf.ContainsValue(s));
+
+        var series = new List<ChartSeries> { new("All AI tools", "ChartInk", samples.Select(s => (long?)s.AiBytes).ToList(), IsTotal: true) };
+        foreach (var (path, slot) in _slotOf.OrderBy(kv => Array.IndexOf(Slots, kv.Value)))
+            series.Add(new ChartSeries(ProjectResolver.DisplayName(path), slot,
+                samples.Select(s => s.Projects.TryGetValue(path, out var v) ? v : (long?)null).ToList()));
+        Series = series;
+
+        var latest = samples.Count > 0 ? samples[^1].Projects : new Dictionary<string, long>();
+        Projects.Clear();
+        foreach (var (path, peak) in peaks.Take(20))
+            Projects.Add(new ProjectHistoryRow(ProjectResolver.DisplayName(path), path, _slotOf.GetValueOrDefault(path),
+                latest.GetValueOrDefault(path), peak));
+
+        var day = MemoryHistory.Freed(log, nowUtc - MemoryHistory.Window);
+        var all = MemoryHistory.Freed(log, DateTime.MinValue);
+        OnChart = _slotOf.OrderBy(kv => Array.IndexOf(Slots, kv.Value))
+            .Select(kv => Projects.FirstOrDefault(p => string.Equals(p.Path, kv.Key, StringComparison.OrdinalIgnoreCase)))
+            .OfType<ProjectHistoryRow>().ToList();
+        Raise(nameof(OnChart));
+
+        FreedToday = day.Stops == 0
+            ? "Nothing freed in the last 24 hours."
+            : $"Freed {Format.Bytes(day.Bytes)} in the last 24 hours ({day.Stops} stop(s)): " +
+              $"{Format.Bytes(day.ManualBytes)} by you, {Format.Bytes(day.AutoBytes)} by automatic rules, {Format.Bytes(day.AgentBytes)} by agents through MCP.";
+        FreedAllTime = all.Stops == 0 ? "" : $"In the recent action log: {Format.Bytes(all.Bytes)} over {all.Stops} stop(s).";
+        Raise(nameof(Times));
+        Raise(nameof(Series));
     }
 }

@@ -19,6 +19,9 @@ public static class SafetyPolicy
         "docker desktop.exe", "com.docker.backend.exe",
     };
 
+    /// <summary>System processes, IDEs, terminals and WSL/Docker: never stopped, and never memory-capped.</summary>
+    public static bool IsProtected(string name) => ProtectedNames.Contains(name);
+
     public static readonly TimeSpan MinimumIdle = TimeSpan.FromMinutes(2);
 
     public static SafetyCheck Check(OrphanTree tree, int selfPid) =>

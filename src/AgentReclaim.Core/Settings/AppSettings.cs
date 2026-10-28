@@ -34,6 +34,16 @@ public sealed class AppSettings
     /// </summary>
     public bool AllowAgentSelfStop { get; set; }
 
+    /// <summary>A notification when an agent leaves a process behind, e.g. "Claude Code left node.exe running on port 5173".</summary>
+    public bool NotifyNewLeftovers { get; set; }
+
+    /// <summary>
+    /// Opt-in: cap the memory each agent session's processes may use together (Windows job object). The
+    /// agent itself is never capped. Reaching the cap makes a build or server fail with out-of-memory.
+    /// </summary>
+    public bool CapSessionMemory { get; set; }
+    public int SessionMemoryCapGb { get; set; } = 8;
+
     // Appearance
     public ThemePreference Theme { get; set; } = ThemePreference.System;
 

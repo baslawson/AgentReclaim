@@ -185,10 +185,14 @@ public sealed class MainViewModel : ObservableObject
     public bool HasNoFindings => Findings.Count == 0;
     public bool HasNoProjects => Projects.Count == 0;
 
+    /// <summary>The last poll's projects (for tying containers to them).</summary>
+    public IReadOnlyList<ProjectSummary> LatestProjects { get; private set; } = [];
+
     public void Update(MonitorUpdate update)
     {
         var result = update.Result;
         _latest = result;
+        LatestProjects = update.Projects;
 
         CollectionSync.Sync(Ports, update.Ports, p => (p.Port, p.Process.Key), r => (r.Model.Port, r.Model.Process.Key),
             p => new PortRow(p), (row, p) => row.Update(p));

@@ -21,17 +21,21 @@ public partial class MainWindow : Window
     private readonly CleanupViewModel _cleanup;
     private readonly ProcessTerminator _terminator;
     private readonly MonitorService _monitor;
+    private readonly ActionLog _log;
+    private readonly HistoryViewModel _history = new();
 
     public MainWindow(MainViewModel viewModel, SettingsViewModel settings, CleanupViewModel cleanup,
-        ProcessTerminator terminator, MonitorService monitor)
+        ProcessTerminator terminator, MonitorService monitor, ActionLog log)
     {
         Resources.Add("BoolToVisibility", new BooleanToVisibilityConverter());
         InitializeComponent();
         DataContext = _viewModel = viewModel;
         SettingsTab.DataContext = _settings = settings;
         CleanupTab.DataContext = _cleanup = cleanup;
+        HistoryTab.DataContext = _history;
         _terminator = terminator;
         _monitor = monitor;
+        _log = log;
 
         _settings.RefreshHookStatus();
         Loaded += (_, _) => RefreshWsl();
@@ -336,6 +340,104 @@ public partial class MainWindow : Window
         {
             _cleanup.IsBusy = false;
         }
+    }
+
+    // ---- History ----
+
+    /// <summary>Redraws the History tab if it's showing (it is also refreshed whenever it's opened).</summary>
+    public void RefreshHistory()
+    {
+        if (!IsVisible || !HistoryTab.IsSelected) return;
+        try
+        {
+            _history.Update(_monitor.History?.Samples ?? [], _log.ReadRecent(5000), DateTime.UtcNow);
+            Chart.SetData(_history.Times, _history.Series);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("History refresh failed", ex);
+        }
+    }
+
+    private bool _containersListed;
+
+    private void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.OriginalSource, Tabs)) return; // a grid or combo box inside a tab
+        if (HistoryTab.IsSelected) RefreshHistory();
+        if (CleanupTab.IsSelected && !_containersListed && _cleanup.IsIdle)
+        {
+            _containersListed = true;
+            _ = RefreshContainersAsync();
+        }
+    }
+
+    /// <summary>Legend and table swatches take their series colour from the theme, so they follow a theme switch.</summary>
+    private void Swatch_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Shapes.Rectangle { Tag: string key } swatch)
+            swatch.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, key);
+    }
+
+    // ---- Docker containers ----
+
+    private async void DockerRefresh_Click(object sender, RoutedEventArgs e) => await RefreshContainersAsync();
+
+    private async Task RefreshContainersAsync()
+    {
+        // async void callers: nothing may escape.
+        try
+        {
+            _cleanup.IsBusy = true;
+            _cleanup.DockerSummary = "Asking Docker…";
+            var list = await Task.Run(() => DockerContainers.List());
+            _cleanup.SetContainers(list, _viewModel.LatestProjects, _monitor.History?.TopProjects(50) ?? []);
+        }
+        catch (Exception ex)
+        {
+            _cleanup.DockerSummary = $"Couldn't list containers: {ex.Message}";
+        }
+        finally
+        {
+            _cleanup.IsBusy = false;
+        }
+    }
+
+    private async void StopContainer_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not ContainerRow row) return;
+        var c = row.Info;
+        var why = row.Link == ContainerLink.None
+            ? "No AI agent has worked in its folder today, so it may be something you use. "
+            : $"{row.Ai}. ";
+        var text = $"Stop container {c.Name}?\n\nImage: {c.Image}\nCompose folder: {row.Folder}\n" +
+                   (c.Ports.Count > 0 ? $"Ports: {string.Join(", ", c.Ports)}\n" : "") +
+                   (c.MemoryBytes > 0 ? $"Memory: {row.Memory}\n" : "") +
+                   $"\n{why}This runs `docker stop`: the container gets 10 seconds to shut down. " +
+                   (c.AutoRemove
+                       ? "\n\nTHIS CONTAINER WAS STARTED WITH --rm: when it stops, Docker DELETES it, together with its anonymous volumes " +
+                         "(data not in a named volume or a folder on your PC is lost). It can't be started again, only recreated."
+                       : "The container is kept (with its data), so `docker start` or `docker compose up` brings it back. Nothing is deleted.");
+        if (MessageBox.Show(this, text, c.AutoRemove ? "Stop and delete container" : "Stop container", MessageBoxButton.YesNo,
+                row.Link == ContainerLink.None || c.AutoRemove ? MessageBoxImage.Warning : MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+            return;
+
+        try
+        {
+            _cleanup.IsBusy = true;
+            var result = await Task.Run(() => DockerContainers.StopLogged(c, _log, "manual: stop container", row.ProjectPath));
+            _viewModel.AddActivity(result.Output);
+            ActionCompleted?.Invoke(new TerminationResult(result.Success, result.Output, result.Success ? c.MemoryBytes : 0));
+        }
+        catch (Exception ex)
+        {
+            _viewModel.AddActivity($"Couldn't stop container {c.Name}: {ex.Message}");
+        }
+        finally
+        {
+            _cleanup.IsBusy = false;
+        }
+        await RefreshContainersAsync();
     }
 
     // ---- Settings: integrations ----
