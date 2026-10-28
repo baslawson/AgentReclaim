@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using AgentReclaim.Core.Analysis;
 using AgentReclaim.Core.Collection;
 using AgentReclaim.Core.Model;
@@ -25,6 +26,8 @@ public sealed class ProcessTerminator(
 
     private readonly Func<IReadOnlySet<int>, int?> _readConnections = readConnections ?? TcpTable.EstablishedFor;
 
+    private const int ERROR_ACCESS_DENIED = 5;
+
     public TimeSpan GracePeriod { get; init; } = TimeSpan.FromSeconds(5);
 
     /// <param name="trigger">"manual" or the name of the auto rule, recorded in the log.</param>
@@ -32,10 +35,18 @@ public sealed class ProcessTerminator(
     /// Re-read the TCP tables right before stopping and refuse if any approved process has an established
     /// connection, or if the tables can't be read. Used by automatic stops.
     /// </param>
-    public TerminationResult StopTree(OrphanTree tree, string trigger, bool requireNoConnections = false)
+    public TerminationResult StopTree(OrphanTree tree, string trigger, bool requireNoConnections = false) =>
+        StopSubtree(tree.Root, AgentSignatures.DisplayName(tree.Kind), tree.Attribution.ToString(), trigger, requireNoConnections);
+
+    /// <summary>
+    /// Stops <paramref name="rootNode"/> and the descendants it had when it was checked, with the same
+    /// re-checks as <see cref="StopTree"/>. <paramref name="agent"/> and <paramref name="attribution"/> only go in the log.
+    /// </summary>
+    public TerminationResult StopSubtree(ProcessNode rootNode, string agent, string attribution, string trigger,
+        bool requireNoConnections = false)
     {
-        var root = tree.Root.Process;
-        var approved = tree.Root.SelfAndDescendants().Select(x => x.Node.Process).ToList(); // root first
+        var root = rootNode.Process;
+        var approved = rootNode.SelfAndDescendants().Select(x => x.Node.Process).ToList(); // root first
         var approvedKeys = approved.Select(p => p.Key).ToHashSet();
 
         // 1. The tree may have changed while the user was reading the confirmation. Refuse if it gained anything.
@@ -60,20 +71,23 @@ public sealed class ProcessTerminator(
                 return new TerminationResult(false, $"Not stopped: {root.Name} now has {connections} open connection(s).", 0);
         }
 
-        // 2. Record the intent before doing anything irreversible.
         var cwd = NativeProcess.GetCurrentDirectory(root.Pid);
-        var intent = Entry("intent", true, "About to stop", 0);
-        if (!log.TryWrite(intent, out var logError))
-            return new TerminationResult(false, $"Not stopped: couldn't write the action log ({logError}).", 0);
-
-        // 3. Hold a handle on each approved instance. An open handle also stops Windows reusing its PID meanwhile.
         var handles = new List<(ProcessInfo Process, SafeProcessHandle Handle)>();
         try
         {
+            // 2. Hold a handle on each approved instance. An open handle also stops Windows reusing its PID meanwhile.
+            //    Access denied means it's still running but can't be stopped (a service, or elevated): refuse the
+            //    whole tree up front rather than stop part of it and report success.
+            var denied = new List<string>();
             foreach (var p in approved)
             {
                 var handle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)p.Pid);
-                if (handle.IsInvalid) { handle.Dispose(); continue; }
+                if (handle.IsInvalid)
+                {
+                    if (Marshal.GetLastWin32Error() == ERROR_ACCESS_DENIED) denied.Add($"{p.Name} (pid {p.Pid})");
+                    handle.Dispose(); // otherwise it has exited
+                    continue;
+                }
                 if (!GetProcessTimes(handle, out var created, out _, out _, out _) || created != p.Key.StartTicks)
                 {
                     handle.Dispose(); // a different process now has this PID
@@ -81,6 +95,16 @@ public sealed class ProcessTerminator(
                 }
                 handles.Add((p, handle));
             }
+            if (denied.Count > 0)
+                return new TerminationResult(false,
+                    $"Not stopped: Windows won't let AgentReclaim stop {string.Join(", ", denied.Take(5))}. It probably runs as a service or as administrator.", 0);
+            if (handles.Count == 0)
+                return new TerminationResult(false, $"{root.Name} (pid {root.Pid}) already exited.", 0);
+
+            // 3. Record the intent before doing anything irreversible.
+            var intent = Entry("intent", true, "About to stop", 0);
+            if (!log.TryWrite(intent, out var logError))
+                return new TerminationResult(false, $"Not stopped: couldn't write the action log ({logError}).", 0);
 
             // 4. Ask nicely first.
             var graceful = ConsoleSignal.TrySendCtrlC(handles.Select(h => h.Process.Pid), approvedKeys.Select(k => k.Pid).ToHashSet())
@@ -117,7 +141,7 @@ public sealed class ProcessTerminator(
 
         ActionLogEntry Entry(string phase, bool success, string message, long freed) => new(
             DateTime.UtcNow, "stop-tree", phase, trigger, success, message, root.Pid, root.Name, root.ExePath,
-            root.CommandLine, cwd, approved.Count, freed, AgentSignatures.DisplayName(tree.Kind), tree.Attribution.ToString());
+            root.CommandLine, cwd, approved.Count, freed, agent, attribution);
     }
 
     /// <summary>Current descendants of <paramref name="rootKey"/>, using the same parent-must-be-older rule as the analyzer.</summary>

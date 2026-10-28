@@ -24,6 +24,16 @@ public sealed class AppSettings
     // Phase 5
     public bool StartWithWindows { get; set; }
 
+    /// <summary>One notification when memory stays above <see cref="LowMemoryAlertPercent"/> (a notice, not an action).</summary>
+    public bool LowMemoryAlerts { get; set; } = true;
+    public int LowMemoryAlertPercent { get; set; } = 90;
+
+    /// <summary>
+    /// The MCP server's stop_my_process tool: an agent may stop processes in its own tree (and its own
+    /// leftovers), nothing else. Off until the user turns it on.
+    /// </summary>
+    public bool AllowAgentSelfStop { get; set; }
+
     // Appearance
     public ThemePreference Theme { get; set; } = ThemePreference.System;
 

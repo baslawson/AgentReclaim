@@ -37,6 +37,7 @@ internal sealed class TrayIcon : IDisposable
             Visible = true,
         };
         _icon.DoubleClick += (_, _) => open();
+        _icon.BalloonTipClicked += (_, _) => open();
     }
 
     public void Update(AnalysisResult result)
@@ -56,8 +57,9 @@ internal sealed class TrayIcon : IDisposable
         _icon.Text = text.Length > 127 ? text[..127] : text;
     }
 
+    /// <summary>A Windows notification; clicking it opens the window.</summary>
     public void ShowMessage(string title, string text, bool isError) =>
-        _icon.ShowBalloonTip(4000, title, text, isError ? ToolTipIcon.Warning : ToolTipIcon.Info);
+        _icon.ShowBalloonTip(4000, title, text.Length > 255 ? text[..254] + "…" : text, isError ? ToolTipIcon.Warning : ToolTipIcon.Info);
 
     private static void OpenDataFolder()
     {

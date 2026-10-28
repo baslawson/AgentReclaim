@@ -78,10 +78,24 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
         }
 
         // Record lineage for everything under a live agent before deciding what's orphaned.
+        // The owner is the outermost agent (the session); every agent above it is kept too, so an agent nested
+        // in another (Codex started by Claude) can still find its own leftovers over MCP.
+        IEnumerable<ProcessKey> AgentsAbove(ProcessInfo p)
+        {
+            var seen = new HashSet<int>();
+            for (var at = ParentOf(p); at is not null && seen.Add(at.Pid); at = ParentOf(at))
+                if (AgentSignatures.AgentRootKind(at) is not null) yield return at.Key;
+        }
+
         foreach (var p in snapshot.Processes)
         {
             if (SessionRootOf(p) is { } root)
-                lineage.Record(p.Key, new LineageEntry(AgentSignatures.AgentRootKind(root)!.Value, root.Pid, root.Name, OwnerStartTicks: root.Key.StartTicks));
+            {
+                lineage.Record(p.Key, new LineageEntry(AgentSignatures.AgentRootKind(root)!.Value, root.Pid, root.Name,
+                    OwnerStartTicks: root.Key.StartTicks,
+                    // Union with what was seen before: if a launcher in between exits, the agents above it still count.
+                    Agents: LineageEntry.FormatAgents(AgentsAbove(p).Concat(lineage.Get(p.Key)?.AgentKeys ?? new HashSet<ProcessKey>()))));
+            }
         }
 
         // Anything above a live agent is hosting it (e.g. a plugin broker that launched Codex), not a leftover.
@@ -119,10 +133,21 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
             return result;
         }
 
-        ProcessNode Build(ProcessInfo p) => new(
-            p,
-            IdleFor(p.Key, now),
-            children.TryGetValue(p.Pid, out var list) ? list.Select(Build).ToList() : []);
+        // Memoised, so sessions, leftovers and the all-processes index share the same nodes.
+        // Every process is built now, including unreadable ones (no start time), whose stale parent PIDs
+        // could form a loop: a process already being built is never its own descendant.
+        var built = new Dictionary<ProcessKey, ProcessNode>();
+        var building = new HashSet<int>();
+        ProcessNode Build(ProcessInfo p)
+        {
+            if (built.TryGetValue(p.Key, out var node)) return node;
+            building.Add(p.Pid);
+            node = new ProcessNode(p, IdleFor(p.Key, now),
+                children.TryGetValue(p.Pid, out var list) ? list.Where(c => !building.Contains(c.Pid)).Select(Build).ToList() : []);
+            building.Remove(p.Pid);
+            built[p.Key] = node;
+            return node;
+        }
 
         var sessions = snapshot.Processes
             .Where(p => SessionRootOf(p) == p)
@@ -137,7 +162,10 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
             if (ParentOf(p) is { } parent && OrphanInfo(parent) is not null) continue; // not the top of its tree
             orphans.Add(info.Guessed
                 ? new OrphanTree(Build(p), info.Kind, Attribution.Heuristic, info.OwnerName)
-                : new OrphanTree(Build(p), info.Kind, Attribution.Observed, $"{info.OwnerName} (pid {info.OwnerPid})", info.OwnerPid, info.OwnerStartTicks));
+                : new OrphanTree(Build(p), info.Kind, Attribution.Observed, $"{info.OwnerName} (pid {info.OwnerPid})", info.OwnerPid, info.OwnerStartTicks)
+                {
+                    Agents = info.AgentKeys,
+                });
         }
         orphans.Sort((a, b) => b.Root.TotalPrivateBytes.CompareTo(a.Root.TotalPrivateBytes));
 
@@ -147,7 +175,8 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
         lineage.SaveIfDirty();
 
         var findings = FindLeaks(sessions, now).Concat(FindStalePiles(sessions, now)).ToList();
-        return new AnalysisResult(snapshot, sessions, orphans, findings);
+        foreach (var p in snapshot.Processes) Build(p);
+        return new AnalysisResult(snapshot, sessions, orphans, findings) { Nodes = built };
     }
 
     /// <summary>
@@ -188,7 +217,7 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
             yield return new Finding(
                 $"{name} (pid {process.Pid}) keeps growing: {growth >> 20} MB in {(int)(last.Time - first.Time).TotalMinutes} min",
                 $"From {first.Bytes >> 20} MB to {last.Bytes >> 20} MB and still climbing. Restarting that session (resume it afterwards) gives the memory back.",
-                growth);
+                growth, FindingKind.GrowingAgent);
         }
     }
 
@@ -213,7 +242,7 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
                 findings.Add(new Finding(
                     $"{pile.Count()} idle {pile.Key} under {AgentSignatures.DisplayName(session.Kind)} (pid {root.Pid})",
                     $"Older than {_options.StaleChildAge.TotalMinutes:0} min and not using CPU. They usually go away when that session restarts.",
-                    bytes));
+                    bytes, FindingKind.IdlePile));
             }
         }
         return findings.OrderByDescending(f => f.Bytes).ToList();

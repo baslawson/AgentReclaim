@@ -40,13 +40,23 @@ public class CodexFindingsTests
     {
         var logPath = TempLog();
         Directory.CreateDirectory(logPath); // a directory where the log file should be: every write fails
-        var root = Proc(999_003, 1, "node.exe");
-        var terminator = new ProcessTerminator(new ActionLog(logPath), () => [(root.Key, root.ParentPid, root.Name)]);
+        // A real, stoppable process: the refusal has to come from the log, not from it being gone.
+        using var ping = Process.Start(new ProcessStartInfo("ping.exe", "-n 60 127.0.0.1") { CreateNoWindow = true, UseShellExecute = false })!;
+        try
+        {
+            var root = new ProcessCollector().Collect().Processes.Single(p => p.Pid == ping.Id);
+            var terminator = new ProcessTerminator(new ActionLog(logPath), () => [(root.Key, root.ParentPid, root.Name)]);
 
-        var result = terminator.StopTree(TreeOf(root), "manual");
+            var result = terminator.StopTree(TreeOf(root), "manual");
 
-        Assert.False(result.Success);
-        Assert.Contains("action log", result.Message);
+            Assert.False(result.Success);
+            Assert.Contains("action log", result.Message);
+            Assert.False(ping.HasExited);
+        }
+        finally
+        {
+            ping.Kill();
+        }
     }
 
     [Fact]

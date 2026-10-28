@@ -11,13 +11,16 @@ Nothing is stopped, throttled or deleted unless you click a button or turn on an
 | Area | What it does |
 |---|---|
 | **Leftovers** | Process trees an agent started and abandoned (the agent or its shell exited, the child kept running). **Stop…** sends Ctrl+C first where that's safe, then force-stops only the processes you approved. |
-| **Live sessions** | Every running `claude.exe` / `codex.exe` (or npm-installed agent under `node`) with its process tree, memory, CPU and listening ports. |
+| **Sessions** | Every running `claude.exe` / `codex.exe` (or npm-installed agent under `node`) with its process tree, memory, CPU and listening ports. |
+| **Projects** | Sessions, leftovers and their ports grouped by the git repo (or folder) they run in, e.g. "AgentReclaim: 2 sessions, 1.4 GB, port 5173". |
+| **Ports** | Every listening TCP port and who holds it: a live session, a leftover, or something else. Find by port, process, PID or project. **Free…** stops the holder and its children (a leftover's whole tree) through the same checks, confirmation and log as **Stop…**; greyed out for system processes, agents and AgentReclaim. |
 | **Findings** | Piles of old idle children under a live agent (e.g. hundreds of `node_repl.exe` under a Codex app-server), and agents whose own memory keeps climbing. |
 | **Cleanup** | WSL/Docker VM memory: shut WSL down, or switch automatic memory reclaim on (`dropCache`, WSL's default) or off (`autoMemoryReclaim=disabled`) in `.wslconfig` (backup kept each time). Disk: old Claude Code / Codex temp folders (to the Recycle Bin), npm/pip/uv caches (via the tool's own clean command), clean stale git worktrees (`git worktree remove`, which refuses if there are changes). |
 | **Auto rules** (opt-in) | Stop leftovers that were *seen* under an agent, have no open connections and have been idle N minutes. Throttle (lower priority + EcoQoS) build/test tools that hog the CPU under an agent. |
 | **Activity** | Every action, with **Relaunch** to start a stopped process again in its original folder. |
 | **Claude Code hook** (opt-in) | A `SessionEnd` hook that tells the app a session ended, so its leftovers only need a short grace period. |
-| **MCP server** | Read-only tools (`resource_overview`, `list_session_processes`, `list_leftovers`) so an agent can ask what's using the machine. It cannot stop anything. |
+| **MCP server** | Read-only tools (`resource_overview`, `list_session_processes`, `list_leftovers`, `list_my_processes`) so an agent can ask what's using the machine. Opt-in `stop_my_process` (Settings → Integrations, **off by default**) lets the agent that started the server stop processes in its own tree and its own leftovers, nothing else (see Safety model). |
+| **Low-memory alert** | When memory stays above 90% (adjustable), one notification naming the biggest AI-related users: leftovers, the WSL/Docker VM, sessions, piles of idle children. Click it to open the app. It doesn't stop anything and won't repeat until memory drops back down (at most every 30 min). On by default; Settings → Notifications. |
 | **Appearance** | Light, dark or Auto (follows Windows' app mode, live). Settings → Appearance. |
 | **Tray** | Memory gauge (green / amber / red) with an orange dot when there are leftovers; start with Windows (opt-in). |
 | **Updates** | Checks GitHub Releases daily. Choose *Don't check*, *Tell me* (default) or *Install automatically*. Packages are verified against the SHA-256 published with the release, the exe is swapped and the app restarts in the tray. If the new version doesn't start and report ready within 90 s, the previous exe is put back and restarted, and that version is not auto-installed again. Settings → Updates, or tray → Check for updates. |
@@ -27,11 +30,12 @@ Nothing is stopped, throttled or deleted unless you click a button or turn on an
 
 - **Attribution.** Each poll (every 3 s) walks every parent chain; a parent only counts if it started before the child (Windows reuses PIDs). Everything under a live agent is recorded in `lineage.json`, including descendants that inherit ownership after their parent exits. An empty or failed process listing raises an error instead of wiping that history.
 - **Never listed as leftovers:** agents themselves (including detached daemons), anything hosting a live agent (e.g. a plugin broker), and AgentReclaim.
-- **Stopping** re-reads the live tree after you confirm and refuses if it gained processes. It holds identity-checked handles and terminates only the approved instances; there is no recursive kill. Ctrl+C is sent by a separate helper process, and only when every process on that console was approved, so your own terminal is never interrupted.
+- **Stopping** re-reads the live tree after you confirm and refuses if it gained processes, or if Windows won't let it stop one of them (a service or elevated process), instead of stopping part of it. It holds identity-checked handles and terminates only the approved instances; there is no recursive kill. Ctrl+C is sent by a separate helper process, and only when every process on that console was approved, so your own terminal is never interrupted.
 - **Logging.** An "intent" line is written before acting and a "done" line after; if the intent can't be logged, nothing is stopped.
 - **Protected:** IDEs, terminals, WSL/Docker, system processes.
 - **Auto-stop** only applies to leftovers with an observed (not guessed) owner, no established connections, and passing the same safety checks. It stops at most one tree per fresh snapshot, re-reads network connections right before stopping, and does nothing if connection data is unavailable. After a hook-reported session end, the grace period counts from the end itself.
 - **Worktree cleanup** only offers worktrees with no changes and no ignored files except build output (`node_modules`, `bin`, `obj`, …), checks again right before removal, and says that removal is permanent.
+- **Agents stopping their own processes** (MCP, opt-in): the caller is the nearest agent above the MCP server, found by walking parents that started before their child (so a reused PID can't pose as the agent). It may only stop processes under itself and leftovers recorded as its own (also when it was started by another agent), never itself, the MCP server or anything between them (nor what hangs off those, like their console host), never another agent (nor a `node.exe` whose command line can't be read, since it could be one) or a protected process. Stops name an exact process instance (pid plus start time) from `list_my_processes`, so a reused pid never matches. The same re-checks and intent/done log as manual stops apply, with the trigger `mcp: <agent> (pid N)`. Your MCP client still asks before each call unless you allowed the tool. This is a guardrail against an agent stopping the wrong thing by mistake, not a security boundary: a program running as you can fake its parent process, but it could also stop those processes directly.
 - **Relaunch** only runs in the original folder; if it's gone, it refuses rather than guess.
 - **Updates** only replace AgentReclaim's own single-file exe, and are checksum-verified. The checksum comes from the same GitHub release, so it catches corrupt downloads, not a compromised account; sign releases for that.
 
@@ -88,14 +92,14 @@ For testing: `AGENTRECLAIM_DATA_DIR` moves the data folder (and gives that insta
 | Path | Contents |
 |---|---|
 | `src/AgentReclaim.Core/Collection` | Process snapshot via Toolhelp + handle queries (no WMI, ~40 ms for ~800 processes), TCP table |
-| `src/AgentReclaim.Core/Analysis` | Agent signatures, lineage store, session/orphan analyzer, stale-pile and leak findings |
+| `src/AgentReclaim.Core/Analysis` | Agent signatures, lineage store, session/orphan analyzer, stale-pile and leak findings, ports and projects |
 | `src/AgentReclaim.Core/Actions` | Safety policy, terminator, Ctrl+C helper, throttler, relauncher, action log |
-| `src/AgentReclaim.Core/Rules` | Opt-in auto rules (pure decisions, unit-tested) |
+| `src/AgentReclaim.Core/Rules` | Opt-in auto rules and the low-memory alert (pure decisions, unit-tested) |
 | `src/AgentReclaim.Core/Cleanup` | WSL status/shutdown/.wslconfig, disk cleanup scanner |
-| `src/AgentReclaim.Core/Integration` | Hook, notification pipe, hook installer, MCP server, autostart |
+| `src/AgentReclaim.Core/Integration` | Hook, notification pipe, hook installer, MCP server and its self-stop scope, autostart, installer cleanup |
 | `src/AgentReclaim.Core/Updates`, `Diagnostics` | GitHub release check, verified self-update, debug log |
 | `src/AgentReclaim.App` | WPF window, tray icon, background monitor, entry point |
-| `tests/AgentReclaim.Core.Tests` | 89 tests: analyzer, safety, auto rules, leaks, config editing, MCP, logging, updates, Codex-review regressions, live-machine checks |
+| `tests/AgentReclaim.Core.Tests` | 125 tests: analyzer, safety, auto rules, leaks, config editing, MCP (including the self-stop scope), ports, projects, memory alert, logging, updates, Codex-review regressions, live-machine checks |
 | `build/publish.ps1`, `build/installer.iss` | Release build and per-user installer |
 | `build/make-icon.ps1` | Draws the app icon (`src/AgentReclaim.App/Assets`) |
 

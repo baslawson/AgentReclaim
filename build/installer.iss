@@ -1,5 +1,5 @@
 ; Per-user installer for AgentReclaim (Inno Setup 6). Built by publish.ps1:
-;   ISCC /DAppVersion=0.2.2 /DSourceDir=<folder with AgentReclaim.exe and README.md> /O<output> installer.iss
+;   ISCC /DAppVersion=0.3.0 /DSourceDir=<folder with AgentReclaim.exe and README.md> /O<output> installer.iss
 ; Installs to %LOCALAPPDATA%\Programs\AgentReclaim without admin rights, so the app's own updater can
 ; replace its exe in place.
 

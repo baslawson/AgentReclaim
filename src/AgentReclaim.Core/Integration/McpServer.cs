@@ -1,19 +1,83 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AgentReclaim.Core.Actions;
 using AgentReclaim.Core.Analysis;
 using AgentReclaim.Core.Collection;
+using AgentReclaim.Core.Model;
+using AgentReclaim.Core.Native;
+using AgentReclaim.Core.Settings;
 
 namespace AgentReclaim.Core.Integration;
 
 /// <summary>
-/// `AgentReclaim.exe mcp`: a read-only MCP server over stdio, so an agent can ask what is using the
-/// machine's resources. It can't stop or change anything; that stays with the user in the app.
+/// What stop_my_process needs: the current settings (read on every call, so the switch in the app
+/// applies at once), who the calling agent is, and how to stop a subtree.
 /// </summary>
-public sealed class McpServer(TextReader input, TextWriter output, Func<AnalysisResult>? analyze = null)
+public sealed class McpSelfScope(
+    Func<AppSettings> settings,
+    Func<CallerAgent?> identifyCaller,
+    Func<ProcessNode, string, string, string, TerminationResult> stop,
+    int selfPid)
+{
+    private CallerAgent? _caller;
+
+    public AppSettings Settings => settings();
+
+    /// <summary>Cached once found; a failed or empty lookup (e.g. a process listing that failed) is retried next time.</summary>
+    public CallerAgent? Caller
+    {
+        get
+        {
+            if (_caller is not null) return _caller;
+            try
+            {
+                return _caller = identifyCaller();
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+            {
+                return null;
+            }
+        }
+    }
+
+    public int SelfPid => selfPid;
+
+    public TerminationResult Stop(ProcessNode root, string agent, string attribution, string trigger) =>
+        stop(root, agent, attribution, trigger);
+
+    public static McpSelfScope Default() => new(
+        () => AppSettings.Load(AppPaths.SettingsFile),
+        () => AgentScope.Identify(Environment.ProcessId, ProcessCollector.ReadIdentities(), ReadCommandLine),
+        (root, agent, attribution, trigger) =>
+            new ProcessTerminator(new ActionLog(AppPaths.ActionLogFile)).StopSubtree(root, agent, attribution, trigger),
+        Environment.ProcessId);
+
+    private static string? ReadCommandLine(int pid)
+    {
+        var handle = NativeProcess.Open(pid);
+        if (handle == IntPtr.Zero) return null;
+        try
+        {
+            return NativeProcess.GetCommandLine(handle);
+        }
+        finally
+        {
+            Native.NativeMethods.CloseHandle(handle);
+        }
+    }
+}
+
+/// <summary>
+/// `AgentReclaim.exe mcp`: an MCP server over stdio, so an agent can ask what is using the machine's
+/// resources. Everything is read-only except stop_my_process, which is off until the user turns it on
+/// and then only reaches the calling agent's own processes and leftovers (see <see cref="AgentScope"/>).
+/// </summary>
+public sealed class McpServer(TextReader input, TextWriter output, Func<AnalysisResult>? analyze = null, McpSelfScope? scope = null)
 {
     private const string DefaultProtocolVersion = "2025-06-18";
 
-    private readonly Func<AnalysisResult> _analyze = analyze ?? AnalyzeNow;
+    private AnalysisResult Analyze() => analyze is not null ? analyze() : AnalyzeNow();
+    private readonly McpSelfScope _scope = scope ?? McpSelfScope.Default();
 
     public void Run()
     {
@@ -97,38 +161,116 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
         Tool("list_leftovers",
             "Process trees left behind by exited agent sessions, with memory, ports and command lines. Stopping them is done by the user in the AgentReclaim app.",
             new JsonObject()),
+        Tool("list_my_processes",
+            "Processes running under the agent that called this tool (e.g. dev servers, watchers, test runners it started) and its own leftovers, with memory, ports and whether stop_my_process may stop each one.",
+            new JsonObject()),
+        Tool("stop_my_process",
+            "Stops one of your own processes (and its children) from list_my_processes, e.g. a dev server you started that is still holding a port. " +
+            "Only works if the user turned it on in AgentReclaim (Settings → Integrations). Never stops anything outside your own process tree, another agent, or protected processes. Logged in AgentReclaim's activity log.",
+            new JsonObject { ["instance_id"] = new JsonObject { ["type"] = "string", ["description"] = "instance_id from list_my_processes (pid plus start time, so a reused pid never matches)" } },
+            readOnly: false, required: ["instance_id"]),
     ];
 
-    private static JsonObject Tool(string name, string description, JsonObject properties) => new()
+    private static JsonObject Tool(string name, string description, JsonObject properties, bool readOnly = true, string[]? required = null)
     {
-        ["name"] = name,
-        ["description"] = description,
-        ["inputSchema"] = new JsonObject { ["type"] = "object", ["properties"] = properties },
-        ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
-    };
+        var schema = new JsonObject { ["type"] = "object", ["properties"] = properties };
+        if (required is not null) schema["required"] = new JsonArray(required.Select(r => (JsonNode)r).ToArray());
+        return new JsonObject
+        {
+            ["name"] = name,
+            ["description"] = description,
+            ["inputSchema"] = schema,
+            ["annotations"] = readOnly
+                ? new JsonObject { ["readOnlyHint"] = true }
+                : new JsonObject { ["readOnlyHint"] = false, ["destructiveHint"] = true, ["idempotentHint"] = false },
+        };
+    }
 
     private JsonObject Call(JsonNode? parameters)
     {
         var name = parameters?["name"]?.GetValue<string>();
         var args = parameters?["arguments"];
-        var result = _analyze();
+        if (name is not ("resource_overview" or "list_session_processes" or "list_leftovers" or "list_my_processes" or "stop_my_process"))
+            throw new ArgumentException($"Unknown tool: {name}");
+        if (name == "stop_my_process") return StopMyProcess(args);
 
+        var result = Analyze();
         object payload = name switch
         {
             "resource_overview" => Overview(result),
             "list_session_processes" => args?["agent_pid"]?.GetValue<int>() is { } pid ? SessionProcesses(result, pid) : Sessions(result),
             "list_leftovers" => result.Orphans.Select(Leftover).ToList(),
-            _ => throw new ArgumentException($"Unknown tool: {name}"),
+            _ => MyProcesses(result),
         };
+        return Content(JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+    }
 
-        return new JsonObject
+    private static JsonObject Content(string text, bool isError = false)
+    {
+        var content = new JsonObject { ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }) };
+        if (isError) content["isError"] = true;
+        return content;
+    }
+
+    private const string TurnedOff =
+        "Stopping processes from MCP is turned off. The user can turn it on in AgentReclaim → Settings → Integrations " +
+        "(\"Let agents stop their own processes\"). Until then, ask the user to stop it, or stop it the way you started it.";
+
+    private object MyProcesses(AnalysisResult result)
+    {
+        if (_scope.Caller is not { } caller)
+            return new { error = "Couldn't tell which agent started this MCP server, so there is nothing to list." };
+
+        return new
         {
-            ["content"] = new JsonArray(new JsonObject
+            agent = caller.Label,
+            stopping_enabled = _scope.Settings.AllowAgentSelfStop,
+            processes = AgentScope.OwnProcesses(result, caller, _scope.SelfPid).Take(200).Select(p => new
             {
-                ["type"] = "text",
-                ["text"] = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }),
-            }),
+                instance_id = InstanceId(p.Node.Process.Key),
+                pid = p.Node.Process.Pid,
+                parent_pid = p.Node.Process.ParentPid,
+                name = p.Node.Process.Name,
+                kind = p.IsLeftover ? "leftover" : "running",
+                depth = p.Depth,
+                memory_mb = p.Node.Process.PrivateBytes >> 20,
+                cpu_percent = Math.Round(p.Node.Process.CpuPercent, 1),
+                ports = p.Node.Process.ListeningPorts,
+                can_stop = p.Check.Allowed,
+                why_not = p.Check.BlockedReason,
+                command_line = p.Node.Process.CommandLine,
+            }).ToList(),
         };
+    }
+
+    private static string InstanceId(ProcessKey key) => $"{key.Pid}:{key.StartTicks}";
+
+    private static ProcessKey? ParseInstanceId(string? text) =>
+        text?.Split(':') is [var pid, var ticks]
+        && int.TryParse(pid, out var p) && p > 0
+        && long.TryParse(ticks, out var t) && t > 0
+            ? new ProcessKey(p, t)
+            : null;
+
+    private JsonObject StopMyProcess(JsonNode? args)
+    {
+        // An exact instance, not a bare pid: if the listed process exited and its pid was reused, nothing matches.
+        if (ParseInstanceId(Text(args?["instance_id"])) is not { } key)
+            throw new ArgumentException("instance_id must be an instance_id from list_my_processes, like \"1234:133000000000000000\".");
+        if (!_scope.Settings.AllowAgentSelfStop) return Content(TurnedOff, isError: true);
+        if (_scope.Caller is not { } caller)
+            return Content("Couldn't tell which agent started this MCP server, so nothing can be stopped from here.", isError: true);
+
+        var (target, refusal) = AgentScope.Resolve(Analyze(), caller, _scope.SelfPid, key);
+        if (target is null) return Content(refusal!, isError: true);
+        if (!target.Check.Allowed) return Content($"Not stopped: {target.Check.BlockedReason}", isError: true);
+
+        var attribution = target.Leftover?.Attribution.ToString() ?? "own process";
+        var outcome = _scope.Stop(target.Node, AgentSignatures.DisplayName(caller.Kind), attribution, $"mcp: {caller.Label}");
+        var text = outcome.Message;
+        if (outcome.Success && target.Check.Warnings.Count > 0)
+            text += " Note: " + string.Join(" ", target.Check.Warnings);
+        return Content(text, isError: !outcome.Success);
     }
 
     private static object Overview(AnalysisResult r) => new
@@ -186,12 +328,29 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
         command_line = o.Root.Process.CommandLine,
     };
 
-    private static AnalysisResult AnalyzeNow()
+    // Kept for the server's lifetime, so what it observes (e.g. a server under a shell that then exits) still
+    // counts on the next request even if the app hasn't recorded it. The app's lineage is merged in each time.
+    private ProcessCollector? _collector;
+    private LineageStore? _lineage;
+    private Analyzer? _analyzer;
+
+    private AnalysisResult AnalyzeNow()
     {
-        var collector = new ProcessCollector();
-        collector.Collect();
-        Thread.Sleep(500); // second sample gives CPU percentages
-        return new Analyzer(new LineageStore(AppPaths.LineageFile, readOnly: true)).Analyze(collector.Collect());
+        if (_collector is null)
+        {
+            // Built in locals and published together, so a failure here is retried on the next request.
+            var collector = new ProcessCollector();
+            var lineage = new LineageStore(AppPaths.LineageFile, readOnly: true);
+            var analyzer = new Analyzer(lineage);
+            collector.Collect();
+            Thread.Sleep(500); // second sample gives CPU percentages
+            (_lineage, _analyzer, _collector) = (lineage, analyzer, collector);
+        }
+        else
+        {
+            _lineage!.MergeFromDisk();
+        }
+        return _analyzer!.Analyze(_collector.Collect());
     }
 
     private void Write(JsonObject message)

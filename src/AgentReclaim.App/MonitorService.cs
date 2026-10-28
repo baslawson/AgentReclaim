@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using AgentReclaim.Core.Actions;
 using AgentReclaim.Core.Analysis;
+using AgentReclaim.Core.Cleanup;
 using AgentReclaim.Core.Collection;
 using AgentReclaim.Core.Diagnostics;
 using AgentReclaim.Core.Integration;
@@ -11,6 +12,9 @@ using AgentReclaim.Core.Settings;
 namespace AgentReclaim.App;
 
 public sealed record AutoActionEvent(bool Success, string Message, ActionLogEntry? Entry);
+
+/// <summary>One poll: the analysis plus the port and per-project views built from it.</summary>
+public sealed record MonitorUpdate(AnalysisResult Result, IReadOnlyList<PortEntry> Ports, IReadOnlyList<ProjectSummary> Projects);
 
 /// <summary>
 /// Polls on a background thread and applies the opt-in auto rules. The collector, analyzer and rule
@@ -26,12 +30,17 @@ public sealed class MonitorService(
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _wake = new(0);
     private readonly ConcurrentQueue<SessionEndedMessage> _sessionEnds = new();
+    private readonly ProjectResolver _projects = new();
+    private readonly MemoryAlertRule _memoryAlert = new();
 
     public TimeSpan Interval { get; set; } = TimeSpan.FromSeconds(3);
     public bool Paused { get; set; }
 
     /// <summary>Raised on the background thread.</summary>
-    public event Action<AnalysisResult>? Updated;
+    public event Action<MonitorUpdate>? Updated;
+
+    /// <summary>Memory stayed above the alert threshold. Raised on the background thread, once per episode.</summary>
+    public event Action<MemoryAlert>? MemoryLow;
 
     public event Action<Exception>? Failed;
 
@@ -85,7 +94,16 @@ public sealed class MonitorService(
             rules.MarkSessionEnded(new ProcessKey(ended.AgentPid, ended.AgentStartTicks), DateTime.UtcNow);
 
         var result = analyzer.Analyze(collector.Collect());
-        Updated?.Invoke(result);
+        _projects.Retain(result.Snapshot.Processes.Select(p => p.Key));
+        Updated?.Invoke(new MonitorUpdate(result,
+            Insights.Ports(result, _projects.ProjectOf),
+            Insights.Projects(result, _projects.ProjectOf)));
+
+        if (_memoryAlert.Evaluate(result, current, DateTime.UtcNow, () => WslManager.VmMemoryBytes(result.Snapshot)) is { } alert)
+        {
+            Log.Info($"Low memory alert: {alert.Text}");
+            MemoryLow?.Invoke(alert);
+        }
 
         foreach (var plan in rules.ProcessesToThrottle(result, current))
         {

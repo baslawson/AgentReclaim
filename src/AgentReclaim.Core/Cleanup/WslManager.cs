@@ -21,6 +21,21 @@ public static partial class WslManager
 
     public static WslStatus GetStatus(ProcessSnapshot snapshot)
     {
+        var vmBytes = VmMemoryBytes(snapshot);
+        var wsl = Path.Combine(Environment.SystemDirectory, "wsl.exe");
+        if (!File.Exists(wsl)) return new WslStatus(false, vmBytes, [], null);
+
+        var running = ToolRunner.Run(wsl, "--list --running --quiet", TimeSpan.FromSeconds(10), environment: Utf8);
+        var distros = running.Success
+            ? running.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : [];
+
+        return new WslStatus(true, vmBytes, distros, ReadAutoMemoryReclaim());
+    }
+
+    /// <summary>Memory held by the WSL/Docker VM (vmmem), without running wsl.exe.</summary>
+    public static long VmMemoryBytes(ProcessSnapshot snapshot)
+    {
         // vmmem is protected, so the handle-based snapshot can't read it; the system-wide
         // process list (what Task Manager uses) can.
         var vmBytes = snapshot.Processes
@@ -33,16 +48,7 @@ public static partial class WslManager
                 using (process)
                     vmBytes += process.WorkingSet64;
         }
-
-        var wsl = Path.Combine(Environment.SystemDirectory, "wsl.exe");
-        if (!File.Exists(wsl)) return new WslStatus(false, vmBytes, [], null);
-
-        var running = ToolRunner.Run(wsl, "--list --running --quiet", TimeSpan.FromSeconds(10), environment: Utf8);
-        var distros = running.Success
-            ? running.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            : [];
-
-        return new WslStatus(true, vmBytes, distros, ReadAutoMemoryReclaim());
+        return vmBytes;
     }
 
     /// <summary>Stops every distro, Docker Desktop's included. Anything running inside them is killed.</summary>

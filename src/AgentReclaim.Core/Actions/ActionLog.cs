@@ -41,7 +41,19 @@ public sealed class ActionLog(string path)
             lock (_gate)
             {
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-                File.AppendAllText(Path, JsonSerializer.Serialize(entry) + Environment.NewLine);
+                // The app and the MCP server (a separate process) both append; retry briefly while the other has it open.
+                for (var attempt = 1; ; attempt++)
+                {
+                    try
+                    {
+                        File.AppendAllText(Path, JsonSerializer.Serialize(entry) + Environment.NewLine);
+                        break;
+                    }
+                    catch (IOException) when (attempt < 5)
+                    {
+                        Thread.Sleep(40 * attempt);
+                    }
+                }
             }
             error = null;
             return true;

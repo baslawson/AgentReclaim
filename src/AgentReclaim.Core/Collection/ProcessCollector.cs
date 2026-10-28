@@ -72,7 +72,8 @@ public sealed class ProcessCollector
                 if (!_staticInfo.TryGetValue(key, out var cached))
                 {
                     cached = (NativeProcess.GetImagePath(handle), NativeProcess.GetCommandLine(handle));
-                    _staticInfo[key] = cached;
+                    // An unread command line isn't cached, so it's retried next poll (it decides whether node.exe is an agent).
+                    if (cached.CommandLine is not null) _staticInfo[key] = cached;
                 }
                 (exe, commandLine) = cached;
             }

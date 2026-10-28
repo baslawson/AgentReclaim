@@ -38,6 +38,47 @@
         <TextBlock DockPanel.Dock="Bottom" Margin="0,8,0,0" Style="{StaticResource StatLabel}" Text="{Binding Status}" />
 
         <TabControl>
+            <!-- Tabs left to right in a plain panel: the stock one stretches them and, once they wrap,
+                 moves the selected row to the bottom, so the tabs jump around when clicked. -->
+            <TabControl.Template>
+                <ControlTemplate TargetType="TabControl">
+                    <DockPanel>
+                        <WrapPanel DockPanel.Dock="Top" IsItemsHost="True" Margin="0,0,0,2" />
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+                            <!-- The name matters: screen readers and UI Automation reach the tab content through it. -->
+                            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" Margin="{TemplateBinding Padding}" />
+                        </Border>
+                    </DockPanel>
+                </ControlTemplate>
+            </TabControl.Template>
+            <TabControl.Resources>
+                <!-- Fluent's tab headers have a large fixed width; these size to their text. -->
+                <Style TargetType="TabItem">
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="TabItem">
+                                <Border x:Name="Chrome" Padding="14,7,14,5" Margin="0,0,2,0" CornerRadius="6,6,0,0" Background="Transparent">
+                                    <StackPanel>
+                                        <ContentPresenter ContentSource="Header" />
+                                        <Border x:Name="Underline" Height="2" Margin="0,5,0,0" CornerRadius="1"
+                                                Background="{DynamicResource Accent}" Visibility="Hidden" />
+                                    </StackPanel>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Card}" />
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Card}" />
+                                        <Setter TargetName="Underline" Property="Visibility" Value="Visible" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </TabControl.Resources>
             <!-- Leftovers -->
             <TabItem Header="{Binding OrphansHeader}">
                 <Grid>
@@ -108,6 +149,58 @@
                         </DataGrid>
                     </DockPanel>
                 </Grid>
+            </TabItem>
+
+            <!-- Projects: sessions, leftovers and ports grouped by repo / working folder -->
+            <TabItem Header="{Binding ProjectsHeader}">
+                <Grid>
+                    <DataGrid ItemsSource="{Binding Projects}" Style="{DynamicResource Grid}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Project" Binding="{Binding Name}" FontWeight="SemiBold" />
+                            <DataGridTextColumn Header="Sessions" Binding="{Binding Sessions}" />
+                            <DataGridTextColumn Header="Procs" Binding="{Binding Processes}" />
+                            <DataGridTextColumn Header="Memory" Binding="{Binding Memory}" SortMemberPath="MemoryBytes" />
+                            <DataGridTextColumn Header="Leftovers" Binding="{Binding Leftovers}" />
+                            <DataGridTextColumn Header="Ports" Binding="{Binding Ports}" />
+                            <DataGridTextColumn Header="Folder" Binding="{Binding Path}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
+                               Foreground="{DynamicResource Muted}" TextWrapping="Wrap" MaxWidth="460"
+                               Text="No Claude Code or Codex sessions or leftovers right now. They are grouped here by the git repo (or folder) they run in."
+                               Visibility="{Binding HasNoProjects, Converter={StaticResource BoolToVisibility}}" />
+                </Grid>
+            </TabItem>
+
+            <!-- Ports: who is listening, and freeing one -->
+            <TabItem Header="{Binding PortsHeader}">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="4,4,4,8">
+                        <TextBlock DockPanel.Dock="Left" Text="Find:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBox x:Name="PortFilter" DockPanel.Dock="Left" Width="160" TextChanged="PortFilter_TextChanged"
+                                 ToolTip="A port number, process name, PID or project" />
+                        <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" Style="{StaticResource StatLabel}" TextWrapping="Wrap"
+                                   Text="Every listening TCP port, Claude Code and Codex first. Free… stops the process holding it and its children (a leftover's whole tree), with the same checks and log as Stop… on Leftovers." />
+                    </DockPanel>
+                    <DataGrid x:Name="PortsGrid" ItemsSource="{Binding Ports}" Style="{DynamicResource Grid}">
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="" Width="Auto">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="Free…" Padding="10,2" Margin="2" Click="FreePort_Click" IsEnabled="{Binding CanFree, Mode=OneWay}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Port" Binding="{Binding Port}" FontWeight="SemiBold" />
+                            <DataGridTextColumn Header="Process" Binding="{Binding Name}" />
+                            <DataGridTextColumn Header="PID" Binding="{Binding Pid}" />
+                            <DataGridTextColumn Header="Belongs to" Binding="{Binding Owner}" />
+                            <DataGridTextColumn Header="Project" Binding="{Binding Project}" />
+                            <DataGridTextColumn Header="Memory" Binding="{Binding Memory}" SortMemberPath="MemoryBytes" />
+                            <DataGridTextColumn Header="Command line" Binding="{Binding CommandLine}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
             </TabItem>
 
             <!-- Findings -->
@@ -248,6 +341,16 @@
 
                         <CheckBox Content="Warn when an agent's memory keeps growing" IsChecked="{Binding LeakWarnings}" />
 
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Notifications" Margin="0,20,0,0" />
+                        <CheckBox Content="Tell me when memory is running low" IsChecked="{Binding LowMemoryAlerts}" />
+                        <StackPanel Orientation="Horizontal" Margin="20,4,0,0">
+                            <TextBlock Text="When memory use stays above" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding LowMemoryAlertPercent, UpdateSourceTrigger=LostFocus}" />
+                            <TextBlock Text="%" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,4,0,0"
+                                   Text="One notification naming the biggest AI-related users (leftovers, the WSL/Docker VM, sessions, piles of idle children). Click it to open AgentReclaim. It doesn't stop anything, and won't repeat until memory has dropped back down (at most every 30 minutes)." />
+
                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="Disk cleanup" Margin="0,20,0,0" />
                         <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                             <TextBlock Text="Only offer folders untouched for" VerticalAlignment="Center" />
@@ -267,13 +370,16 @@
                             <Button Content="Remove hook" Padding="10,3" Click="RemoveHook_Click" />
                         </StackPanel>
 
-                        <TextBlock FontWeight="SemiBold" Text="MCP server (read-only)" Margin="0,14,0,0" />
+                        <TextBlock FontWeight="SemiBold" Text="MCP server" Margin="0,14,0,0" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap"
-                                   Text="Lets an agent ask what is using memory and CPU. It can't stop anything. Add it to Claude Code with:" />
+                                   Text="Lets an agent ask what is using memory and CPU, and list its own processes. Add it to Claude Code with:" />
                         <DockPanel Margin="0,4,0,0">
                             <Button DockPanel.Dock="Right" Content="Copy" Padding="10,3" Margin="8,0,0,0" Click="CopyMcp_Click" />
                             <TextBox Text="{Binding McpCommand, Mode=OneWay}" IsReadOnly="True" Width="Auto" Margin="0" FontFamily="Consolas" />
                         </DockPanel>
+                        <CheckBox Content="Let agents stop their own processes (off by default)" IsChecked="{Binding AllowAgentSelfStop}" />
+                        <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
+                                   Text="Turns on the stop_my_process tool: the agent that started the MCP server can stop processes in its own tree (e.g. a dev server it left holding a port) and leftovers it was seen starting. Never itself, another agent, anything outside its tree, or protected processes. Every stop is written to the activity log. Your MCP client still asks before each call unless you allowed the tool." />
 
                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="Startup" Margin="0,20,0,0" />
                         <CheckBox Content="Start with Windows (in the tray)" IsChecked="{Binding StartWithWindows}" />

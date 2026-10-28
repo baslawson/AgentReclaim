@@ -119,6 +119,10 @@ public sealed class SettingsViewModel(AppSettings settings, Action<AppSettings> 
         });
     }
 
+    public bool LowMemoryAlerts { get => settings.LowMemoryAlerts; set => Set(() => settings.LowMemoryAlerts = value); }
+    public int LowMemoryAlertPercent { get => settings.LowMemoryAlertPercent; set => Set(() => settings.LowMemoryAlertPercent = Math.Clamp(value, 50, 99)); }
+    public bool AllowAgentSelfStop { get => settings.AllowAgentSelfStop; set => Set(() => settings.AllowAgentSelfStop = value); }
+
     public AppSettings Current => settings;
 
     // ---- Diagnostics ----

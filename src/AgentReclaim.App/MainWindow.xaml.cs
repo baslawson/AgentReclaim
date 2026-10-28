@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using AgentReclaim.Core;
 using AgentReclaim.Core.Actions;
+using AgentReclaim.Core.Analysis;
 using AgentReclaim.Core.Diagnostics;
 using AgentReclaim.Core.Updates;
 using AgentReclaim.Core.Cleanup;
@@ -81,6 +82,84 @@ public partial class MainWindow : Window
         {
             _viewModel.AddActivity($"Stop failed: {ex.Message}");
             MessageBox.Show(this, ex.Message, "Stop failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _monitor.RefreshNow();
+        }
+    }
+
+    // ---- Ports ----
+
+    private void PortFilter_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        var filter = PortFilter.Text;
+        System.Windows.Data.CollectionViewSource.GetDefaultView(_viewModel.Ports).Filter =
+            string.IsNullOrWhiteSpace(filter) ? null : item => item is PortRow row && row.Matches(filter);
+    }
+
+    private async void FreePort_Click(object sender, RoutedEventArgs e)
+    {
+        // async void: anything escaping here would take the app down, so nothing may escape.
+        try
+        {
+            if ((sender as FrameworkElement)?.DataContext is not PortRow row) return;
+            var entry = row.Model;
+            var root = entry.StopRoot;
+
+            SafetyCheck check;
+            string agent, attribution;
+            if (entry.Leftover is { } leftover)
+            {
+                check = SafetyPolicy.Check(leftover, Environment.ProcessId);
+                agent = AgentSignatures.DisplayName(leftover.Kind);
+                attribution = leftover.Attribution.ToString();
+            }
+            else
+            {
+                var caution = entry.Holder == PortHolder.Session
+                    ? $"It is running under a live {entry.Owner}, which may still be using it."
+                    : "It wasn't started by Claude Code or Codex. Make sure you know what it is before stopping it.";
+                check = SafetyPolicy.CheckSubtree(root, Environment.ProcessId, [caution]);
+                agent = entry.Kind is { } kind ? AgentSignatures.DisplayName(kind) : "none";
+                attribution = entry.Holder == PortHolder.Session ? "live session" : "not an AI tool";
+            }
+
+            if (!check.Allowed)
+            {
+                MessageBox.Show(this, check.BlockedReason, "AgentReclaim can't free this port", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var message = new StringBuilder().AppendLine($"Free port {entry.Port}?").AppendLine();
+            message.AppendLine(root.Process.Pid == entry.Process.Pid
+                ? $"Stops {root.Process.Name} (pid {root.Process.Pid}) and {root.TotalCount - 1} child process(es)."
+                : $"{entry.Process.Name} (pid {entry.Process.Pid}) is part of a leftover tree, so the whole tree is stopped: " +
+                  $"{root.Process.Name} (pid {root.Process.Pid}) and {root.TotalCount - 1} child process(es).");
+            message.AppendLine($"This frees about {Format.Bytes(root.TotalPrivateBytes)}. It gets Ctrl+C first where that's safe, then is force-stopped.")
+                .AppendLine()
+                .AppendLine($"Belongs to: {entry.Owner}");
+            if (entry.ProjectPath is { } project) message.AppendLine($"Folder: {project}");
+            message.AppendLine($"Command line: {root.Process.CommandLine ?? "(unavailable)"}");
+            if (check.Warnings.Count > 0)
+            {
+                message.AppendLine().AppendLine("Heads up:");
+                foreach (var warning in check.Warnings) message.AppendLine($"  • {warning}");
+            }
+
+            if (MessageBox.Show(this, message.ToString(), $"Free port {entry.Port}?", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
+                != MessageBoxResult.Yes)
+                return;
+
+            // The terminator re-reads the tree and refuses if it changed while this dialog was open.
+            var result = await Task.Run(() => _terminator.StopSubtree(root, agent, attribution, $"manual: free port {entry.Port}"));
+            _viewModel.AddActivity(result.Success ? $"Port {entry.Port}: {result.Message} Freed ~{Format.Bytes(result.FreedBytes)}." : result.Message, result.Entry);
+            ActionCompleted?.Invoke(result);
+        }
+        catch (Exception ex)
+        {
+            _viewModel.AddActivity($"Freeing the port failed: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "Free port failed", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {

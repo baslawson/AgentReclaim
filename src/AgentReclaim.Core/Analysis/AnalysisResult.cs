@@ -50,10 +50,20 @@ public sealed record OrphanTree(ProcessNode Root, AgentKind Kind, Attribution At
 {
     /// <summary>The exact agent instance that owned this tree, when known (pid plus start time, so a reused pid never matches).</summary>
     public ProcessKey? Owner => OwnerPid is { } pid && OwnerStartTicks != 0 ? new ProcessKey(pid, OwnerStartTicks) : null;
+
+    /// <summary>Every agent it was seen running under (just <see cref="Owner"/> unless agents were nested).</summary>
+    public IReadOnlySet<ProcessKey> Agents { get; init; } = new HashSet<ProcessKey>();
 }
 
 /// <summary>Something worth the user's attention that isn't a clean orphan, e.g. a pile of idle children.</summary>
-public sealed record Finding(string Title, string Detail, long Bytes);
+public sealed record Finding(string Title, string Detail, long Bytes, FindingKind Kind = FindingKind.Other);
+
+public enum FindingKind
+{
+    Other,
+    GrowingAgent,
+    IdlePile,
+}
 
 public sealed record AnalysisResult(
     ProcessSnapshot Snapshot,
@@ -65,4 +75,7 @@ public sealed record AnalysisResult(
         Sessions.Sum(s => s.Root.TotalPrivateBytes) + Orphans.Sum(o => o.Root.TotalPrivateBytes);
 
     public long OrphanPrivateBytes => Orphans.Sum(o => o.Root.TotalPrivateBytes);
+
+    /// <summary>Every process's subtree (same parent-must-be-older rule), for stopping something outside a session or leftover.</summary>
+    public IReadOnlyDictionary<ProcessKey, ProcessNode> Nodes { get; init; } = new Dictionary<ProcessKey, ProcessNode>();
 }

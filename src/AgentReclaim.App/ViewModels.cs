@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using AgentReclaim.Core.Actions;
 using AgentReclaim.Core.Analysis;
 using AgentReclaim.Core.Model;
 
@@ -88,6 +89,59 @@ public sealed class MemberRow((ProcessNode Node, int Depth) item) : Row<(Process
     public string CommandLine => Process.CommandLine ?? "";
 }
 
+public sealed class PortRow(PortEntry entry) : Row<PortEntry>(entry)
+{
+    public int Port => Model.Port;
+    public string Name => Model.Process.Name;
+    public int Pid => Model.Process.Pid;
+    public string Owner => Model.Owner;
+    public string Project => Model.ProjectPath is null ? "" : ProjectResolver.DisplayName(Model.ProjectPath);
+    public string ProjectPath => Model.ProjectPath ?? "";
+    public long MemoryBytes => Model.StopRoot.TotalPrivateBytes;
+    public string Memory => MemoryBytes == 0 ? "–" : Format.Bytes(MemoryBytes); // 0: can't be read (system or elevated)
+    public string CommandLine => Model.Process.CommandLine ?? "";
+
+    /// <summary>
+    /// False for what the safety policy never stops (system processes, agents, AgentReclaim) and for processes
+    /// AgentReclaim can't even open (services, elevated apps: no start time read), so Free… is greyed out.
+    /// </summary>
+    public bool CanFree => Model.StopRoot.Process.Key.StartTicks != 0 && SafetyPolicy.CheckSubtree(Model.StopRoot, Environment.ProcessId).Allowed;
+
+    public bool Matches(string filter) =>
+        string.IsNullOrWhiteSpace(filter)
+        || Port.ToString() == filter.Trim()
+        || Name.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase)
+        || Pid.ToString() == filter.Trim()
+        || Project.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase);
+}
+
+public sealed class ProjectRow(ProjectSummary project) : Row<ProjectSummary>(project)
+{
+    public string Name => Model.Name;
+    public string Path => Model.Path ?? "Working folder couldn't be read";
+    public string Sessions => Model.Sessions.Count == 0 ? "" : string.Join(", ", Model.Sessions
+        .GroupBy(s => s.Kind).Select(g => $"{g.Count()} {AgentSignatures.DisplayName(g.Key)}"));
+    public int Processes => Model.Processes;
+    public long MemoryBytes => Model.TotalBytes;
+    public string Memory => Format.Bytes(MemoryBytes);
+    public string Leftovers => Model.Leftovers.Count == 0 ? "" : $"{Model.Leftovers.Count} ({Format.Bytes(Model.LeftoverBytes)})";
+    public string Ports => string.Join(", ", Model.Ports);
+
+    /// <summary>e.g. "AgentReclaim: 2 sessions, 1.4 GB, port 5173".</summary>
+    public string Summary
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (Model.Sessions.Count > 0) parts.Add($"{Model.Sessions.Count} session{(Model.Sessions.Count == 1 ? "" : "s")}");
+            if (Model.Leftovers.Count > 0) parts.Add($"{Model.Leftovers.Count} leftover{(Model.Leftovers.Count == 1 ? "" : "s")}");
+            parts.Add(Memory);
+            if (Model.Ports.Count > 0) parts.Add($"port{(Model.Ports.Count == 1 ? "" : "s")} {Ports}");
+            return $"{Name}: {string.Join(", ", parts)}";
+        }
+    }
+}
+
 public sealed class MainViewModel : ObservableObject
 {
     private AnalysisResult? _latest;
@@ -97,6 +151,8 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<OrphanRow> Orphans { get; } = [];
     public ObservableCollection<SessionRow> Sessions { get; } = [];
     public ObservableCollection<FindingRow> Findings { get; } = [];
+    public ObservableCollection<PortRow> Ports { get; } = [];
+    public ObservableCollection<ProjectRow> Projects { get; } = [];
     public ObservableCollection<ActivityItem> Activity { get; } = [];
 
     public SessionRow? SelectedSession
@@ -120,15 +176,24 @@ public sealed class MainViewModel : ObservableObject
     public string LeftoversDetail => _latest is null ? "" : $"{_latest.Orphans.Count} leftover tree(s)";
 
     public string OrphansHeader => $"Leftovers ({Orphans.Count})";
-    public string SessionsHeader => $"Live sessions ({Sessions.Count})";
+    public string SessionsHeader => $"Sessions ({Sessions.Count})";
     public string FindingsHeader => $"Findings ({Findings.Count})";
+    public string PortsHeader => $"Ports ({Ports.Count})";
+    public string ProjectsHeader => $"Projects ({Projects.Count})";
 
     public bool HasNoOrphans => Orphans.Count == 0;
     public bool HasNoFindings => Findings.Count == 0;
+    public bool HasNoProjects => Projects.Count == 0;
 
-    public void Update(AnalysisResult result)
+    public void Update(MonitorUpdate update)
     {
+        var result = update.Result;
         _latest = result;
+
+        CollectionSync.Sync(Ports, update.Ports, p => (p.Port, p.Process.Key), r => (r.Model.Port, r.Model.Process.Key),
+            p => new PortRow(p), (row, p) => row.Update(p));
+        CollectionSync.Sync(Projects, update.Projects, p => p.Path ?? "", r => r.Model.Path ?? "",
+            p => new ProjectRow(p), (row, p) => row.Update(p));
 
         CollectionSync.Sync(Orphans, result.Orphans, o => o.Root.Process.Key, r => r.Model.Root.Process.Key,
             o => new OrphanRow(o), (row, o) => row.Update(o));

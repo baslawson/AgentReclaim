@@ -16,12 +16,13 @@ public static class Program
         if (args is ["hook", "session-end", ..])
             return SessionEndHook.Run(new StreamReader(Console.OpenStandardInput(), Encoding.UTF8));
 
-        // `AgentReclaim.exe mcp`: read-only MCP server over stdio.
+        // `AgentReclaim.exe mcp`: MCP server over stdio (read-only unless the user allows agents to stop their own processes).
         if (args is ["mcp", ..])
         {
             var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             using var stdin = new StreamReader(Console.OpenStandardInput(), utf8);
             using var stdout = new StreamWriter(Console.OpenStandardOutput(), utf8) { AutoFlush = true };
+            ConsoleSignal.HelperPath = Environment.ProcessPath; // stop_my_process tries Ctrl+C first
             new McpServer(stdin, stdout).Run();
             return 0;
         }

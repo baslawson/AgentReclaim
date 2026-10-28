@@ -72,10 +72,15 @@ public partial class App : Application
         _window.ActionCompleted += result =>
             _tray.ShowMessage(result.Success ? "Freed resources" : "Couldn't stop process", result.Message, !result.Success);
 
-        _monitor.Updated += result => Dispatcher.BeginInvoke(() =>
+        _monitor.Updated += update => Dispatcher.BeginInvoke(() =>
         {
-            viewModel.Update(result);
-            _tray.Update(result);
+            viewModel.Update(update);
+            _tray.Update(update.Result);
+        });
+        _monitor.MemoryLow += alert => Dispatcher.BeginInvoke(() =>
+        {
+            viewModel.AddActivity(alert.Text);
+            _tray.ShowMessage(alert.Title, alert.Text + " Click to open AgentReclaim.", isError: true);
         });
         _monitor.Failed += ex =>
         {

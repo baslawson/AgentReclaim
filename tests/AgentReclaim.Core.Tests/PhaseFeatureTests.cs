@@ -291,9 +291,9 @@ public class McpServerTests
         var replies = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => JsonNode.Parse(l)!).ToList();
         Assert.Equal(4, replies.Count); // the notification gets no reply
         Assert.Equal("agentreclaim", replies[0]["result"]!["serverInfo"]!["name"]!.GetValue<string>());
-        Assert.Equal(3, replies[1]["result"]!["tools"]!.AsArray().Count);
+        Assert.Equal(5, replies[1]["result"]!["tools"]!.AsArray().Count);
         Assert.Contains("\"ai_tools_memory_mb\": 1000", replies[2]["result"]!["content"]![0]!["text"]!.GetValue<string>());
-        Assert.NotNull(replies[3]["error"]); // there is no tool that changes anything
+        Assert.NotNull(replies[3]["error"]); // unknown tool
     }
 }
 
