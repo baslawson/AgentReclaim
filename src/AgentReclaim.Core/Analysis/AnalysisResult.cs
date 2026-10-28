@@ -63,6 +63,7 @@ public enum FindingKind
     Other,
     GrowingAgent,
     IdlePile,
+    Stuck,
 }
 
 public sealed record AnalysisResult(
@@ -78,4 +79,25 @@ public sealed record AnalysisResult(
 
     /// <summary>Every process's subtree (same parent-must-be-older rule), for stopping something outside a session or leftover.</summary>
     public IReadOnlyDictionary<ProcessKey, ProcessNode> Nodes { get; init; } = new Dictionary<ProcessKey, ProcessNode>();
+
+    /// <summary>Processes in live sessions that may be stuck (also listed in <see cref="Findings"/>).</summary>
+    public IReadOnlyList<StuckProcess> Stuck { get; init; } = [];
+}
+
+public enum StuckKind
+{
+    /// <summary>A tool the agent started has shown no activity for a long time: hung, or waiting for input nobody sees.</summary>
+    Waiting,
+
+    /// <summary>Kept a whole CPU core busy for a long time without a break: possibly stuck in a loop.</summary>
+    Spinning,
+}
+
+/// <summary>A process in a live session that may be stuck. A guess from CPU over time; nothing is done about it automatically.</summary>
+public sealed record StuckProcess(AgentSession Session, ProcessNode Node, StuckKind Kind, TimeSpan For)
+{
+    /// <summary>Short, for a status column: "Stuck? No activity for 12 min".</summary>
+    public string Status => Kind == StuckKind.Waiting
+        ? $"Stuck? No activity for {(int)For.TotalMinutes} min"
+        : $"Stuck? Busy for {(int)For.TotalMinutes} min";
 }

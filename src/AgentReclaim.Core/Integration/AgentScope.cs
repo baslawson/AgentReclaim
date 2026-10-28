@@ -55,6 +55,9 @@ public static class AgentScope
             var probe = new ProcessInfo(parent.Key, parent.ParentPid, parent.Name, null, commandLine, DateTime.MinValue, 0, 0, 0, [], 0);
             if (AgentSignatures.AgentRootKind(probe) is { } kind)
                 return new CallerAgent(parent.Key, kind, chain);
+            // Names an agent's package but isn't recognized as one (an unusual launch): it may be the real caller,
+            // so walking on to an outer agent could hand this server that agent's scope.
+            if (AgentSignatures.MightBeAgent(probe)) return null;
 
             chain.Add(parent.Key.Pid);
             pid = parent.Key.Pid;

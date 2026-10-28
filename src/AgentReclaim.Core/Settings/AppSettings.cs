@@ -37,6 +37,21 @@ public sealed class AppSettings
     /// <summary>A notification when an agent leaves a process behind, e.g. "Claude Code left node.exe running on port 5173".</summary>
     public bool NotifyNewLeftovers { get; set; }
 
+    /// <summary>A notification when a process in a session may be stuck (see <see cref="StuckWaitingMinutes"/>). It doesn't stop anything.</summary>
+    public bool NotifyStuck { get; set; }
+
+    /// <summary>A command an agent started counts as possibly stuck after this long with no activity.</summary>
+    public int StuckWaitingMinutes { get; set; } = 10;
+
+    /// <summary>Anything in a session counts as possibly stuck after keeping a whole CPU core busy this long.</summary>
+    public int StuckSpinningMinutes { get; set; } = 15;
+
+    /// <summary>Opt-in: stop a command that has shown no activity for <see cref="StuckWaitingMinutes"/>. The agent sees it fail.</summary>
+    public bool AutoStopStuckWaiting { get; set; }
+
+    /// <summary>Opt-in: stop a command that has kept a whole core busy for <see cref="StuckSpinningMinutes"/> (long builds do this too).</summary>
+    public bool AutoStopStuckSpinning { get; set; }
+
     /// <summary>
     /// Opt-in: cap the memory each agent session's processes may use together (Windows job object). The
     /// agent itself is never capped. Reaching the cap makes a build or server fail with out-of-memory.

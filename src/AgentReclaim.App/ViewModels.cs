@@ -65,18 +65,49 @@ public sealed class SessionRow(AgentSession session) : Row<AgentSession>(session
         : $"Started {Model.Root.Process.StartTimeUtc.ToLocalTime():g}";
     public string CommandLine => Model.Root.Process.CommandLine ?? "";
 
+    private IReadOnlyDictionary<ProcessKey, StuckProcess> _stuck = new Dictionary<ProcessKey, StuckProcess>();
+
+    /// <summary>"1 process may be stuck", or empty.</summary>
+    public string StuckText => _stuck.Count == 0 ? "" : $"{_stuck.Count} process{(_stuck.Count == 1 ? "" : "es")} may be stuck";
+    public bool HasStuck => _stuck.Count > 0;
+
+    /// <summary>Takes this session's share of the poll's possibly-stuck processes.</summary>
+    public void SetStuck(IEnumerable<StuckProcess> all)
+    {
+        _stuck = all.Where(s => s.Session.Root.Process.Key == Model.Root.Process.Key)
+            .GroupBy(s => s.Node.Process.Key).ToDictionary(g => g.Key, g => g.First());
+        Raise(nameof(StuckText));
+        Raise(nameof(HasStuck));
+    }
+
     public void SyncMembers() => CollectionSync.Sync(
         Members,
         Model.Root.SelfAndDescendants(),
         x => x.Node.Process.Key,
         r => r.Model.Node.Process.Key,
-        x => new MemberRow(x),
+        x => new MemberRow(x, StuckOf),
         (row, x) => row.Update(x));
+
+    private StuckProcess? StuckOf(ProcessKey key) => _stuck.GetValueOrDefault(key);
 }
 
-public sealed class MemberRow((ProcessNode Node, int Depth) item) : Row<(ProcessNode Node, int Depth)>(item)
+public sealed class MemberRow((ProcessNode Node, int Depth) item, Func<ProcessKey, StuckProcess?> stuckOf)
+    : Row<(ProcessNode Node, int Depth)>(item)
 {
     private ProcessInfo Process => Model.Node.Process;
+
+    /// <summary>Set when this process may be stuck (the Stop… button acts on it).</summary>
+    public StuckProcess? Stuck => stuckOf(Process.Key);
+    public bool IsStuck => Stuck is not null;
+    public string Status => Stuck?.Status ?? "";
+
+    /// <summary>
+    /// A stuck agent itself is only shown: AgentReclaim never stops an agent, nor a tree holding one or a node.exe
+    /// whose command line couldn't be read (it might be one).
+    /// </summary>
+    public bool CanStop => Stuck is { } stuck && stuck.Node.SelfAndDescendants().All(x =>
+        !AgentSignatures.MightBeAgent(x.Node.Process)
+        && !(x.Node.Process.CommandLine is null && x.Node.Process.Name.Equals("node.exe", StringComparison.OrdinalIgnoreCase)));
 
     public string Name => Model.Depth == 0 ? Process.Name : new string(' ', (Model.Depth - 1) * 4) + "└ " + Process.Name;
     public int Pid => Process.Pid;
@@ -203,6 +234,7 @@ public sealed class MainViewModel : ObservableObject
             o => new OrphanRow(o), (row, o) => row.Update(o));
         CollectionSync.Sync(Sessions, result.Sessions, s => s.Root.Process.Key, r => r.Model.Root.Process.Key,
             s => new SessionRow(s), (row, s) => row.Update(s));
+        foreach (var row in Sessions) row.SetStuck(result.Stuck);
         CollectionSync.Sync(Findings, result.Findings, f => f.Title, r => r.Model.Title,
             f => new FindingRow(f), (row, f) => row.Update(f));
 

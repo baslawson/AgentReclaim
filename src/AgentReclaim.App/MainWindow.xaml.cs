@@ -11,6 +11,7 @@ using AgentReclaim.Core.Updates;
 using AgentReclaim.Core.Cleanup;
 using AgentReclaim.Core.Collection;
 using AgentReclaim.Core.Integration;
+using AgentReclaim.Core.Firewall;
 
 namespace AgentReclaim.App;
 
@@ -23,6 +24,8 @@ public partial class MainWindow : Window
     private readonly MonitorService _monitor;
     private readonly ActionLog _log;
     private readonly HistoryViewModel _history = new();
+    private readonly FirewallViewModel _firewall = new();
+    private bool _firewallLoaded;
 
     public MainWindow(MainViewModel viewModel, SettingsViewModel settings, CleanupViewModel cleanup,
         ProcessTerminator terminator, MonitorService monitor, ActionLog log)
@@ -33,6 +36,7 @@ public partial class MainWindow : Window
         SettingsTab.DataContext = _settings = settings;
         CleanupTab.DataContext = _cleanup = cleanup;
         HistoryTab.DataContext = _history;
+        FirewallTab.DataContext = _firewall;
         _terminator = terminator;
         _monitor = monitor;
         _log = log;
@@ -102,6 +106,57 @@ public partial class MainWindow : Window
             string.IsNullOrWhiteSpace(filter) ? null : item => item is PortRow row && row.Matches(filter);
     }
 
+    /// <summary>Stops a possibly-stuck process in a live session (and what it started), after the usual checks and a confirmation.</summary>
+    private async void StopStuck_Click(object sender, RoutedEventArgs e)
+    {
+        // async void: anything escaping here would take the app down, so nothing may escape.
+        try
+        {
+            if ((sender as FrameworkElement)?.DataContext is not MemberRow { Stuck: { } stuck }) return;
+            var root = stuck.Node;
+            var agent = AgentSignatures.DisplayName(stuck.Session.Kind);
+            var check = SafetyPolicy.CheckSubtree(root, Environment.ProcessId,
+                [$"It is running under a live {agent} session (pid {stuck.Session.Root.Process.Pid}), which will see it fail."],
+                requireKnownNodes: true); // a nested agent whose command line can't be read mustn't pass for a tool
+            if (!check.Allowed)
+            {
+                MessageBox.Show(this, check.BlockedReason, "AgentReclaim can't stop this", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var message = new StringBuilder()
+                .AppendLine($"Stop {root.Process.Name} (pid {root.Process.Pid})?").AppendLine()
+                .AppendLine(stuck.Kind == StuckKind.Waiting
+                    ? $"It has done nothing for {(int)stuck.For.TotalMinutes} min: it may be waiting for input nobody can see, or hung."
+                    : $"It has kept a whole CPU core busy for {(int)stuck.For.TotalMinutes} min.")
+                .AppendLine($"Stops it and {root.TotalCount - 1} child process(es), about {Format.Bytes(root.TotalPrivateBytes)}. It gets Ctrl+C first where that's safe, then is force-stopped.")
+                .AppendLine()
+                .AppendLine($"Command line: {root.Process.CommandLine ?? "(unavailable)"}");
+            if (check.Warnings.Count > 0)
+            {
+                message.AppendLine().AppendLine("Heads up:");
+                foreach (var warning in check.Warnings) message.AppendLine($"  • {warning}");
+            }
+            if (MessageBox.Show(this, message.ToString(), "Stop a stuck process?", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
+                != MessageBoxResult.Yes)
+                return;
+
+            // The terminator re-reads the tree and refuses if it changed while this dialog was open.
+            var result = await Task.Run(() => _terminator.StopSubtree(root, agent, "live session", "manual: stop stuck process"));
+            _viewModel.AddActivity(result.Success ? $"{result.Message} Freed ~{Format.Bytes(result.FreedBytes)}." : result.Message, result.Entry);
+            ActionCompleted?.Invoke(result);
+        }
+        catch (Exception ex)
+        {
+            _viewModel.AddActivity($"Stopping the process failed: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "Stop failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _monitor.RefreshNow();
+        }
+    }
+
     private async void FreePort_Click(object sender, RoutedEventArgs e)
     {
         // async void: anything escaping here would take the app down, so nothing may escape.
@@ -123,7 +178,7 @@ public partial class MainWindow : Window
             {
                 var caution = entry.Holder == PortHolder.Session
                     ? $"It is running under a live {entry.Owner}, which may still be using it."
-                    : "It wasn't started by Claude Code or Codex. Make sure you know what it is before stopping it.";
+                    : "It wasn't started by Claude Code, Codex or Gemini CLI. Make sure you know what it is before stopping it.";
                 check = SafetyPolicy.CheckSubtree(root, Environment.ProcessId, [caution]);
                 agent = entry.Kind is { } kind ? AgentSignatures.DisplayName(kind) : "none";
                 attribution = entry.Holder == PortHolder.Session ? "live session" : "not an AI tool";
@@ -365,6 +420,11 @@ public partial class MainWindow : Window
     {
         if (!ReferenceEquals(e.OriginalSource, Tabs)) return; // a grid or combo box inside a tab
         if (HistoryTab.IsSelected) RefreshHistory();
+        if (FirewallTab.IsSelected && !_firewallLoaded && _firewall.IsIdle)
+        {
+            _firewallLoaded = true;
+            _ = RefreshFirewallAsync();
+        }
         if (CleanupTab.IsSelected && !_containersListed && _cleanup.IsIdle)
         {
             _containersListed = true;
@@ -438,6 +498,132 @@ public partial class MainWindow : Window
             _cleanup.IsBusy = false;
         }
         await RefreshContainersAsync();
+    }
+
+    // ---- Firewall ----
+
+    private async Task RefreshFirewallAsync()
+    {
+        try
+        {
+            _firewall.IsBusy = true;
+            var (status, sockets) = await Task.Run(() => (WindowsFirewall.ReadStatus(), SocketSnapshot.Read()));
+            _firewall.Load(status, sockets, ProcessName);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("Couldn't read the firewall", ex);
+            _viewModel.AddActivity($"Couldn't read Windows Firewall: {ex.Message}");
+        }
+        finally
+        {
+            _firewall.IsBusy = false;
+        }
+    }
+
+    private static string ProcessName(int pid)
+    {
+        if (pid == 4) return "System";
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            return process.ProcessName + ".exe";
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return $"pid {pid}";
+        }
+    }
+
+    private async void FirewallReload_Click(object sender, RoutedEventArgs e) => await RefreshFirewallAsync();
+
+    private void FirewallAdd_Click(object sender, RoutedEventArgs e)
+    {
+        if (_firewall.AddCustom(CustomPort.Text, CustomProtocol.SelectedIndex, CustomDirection.SelectedIndex) is { } error)
+        {
+            MessageBox.Show(this, error, "Add a port", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        CustomPort.Clear();
+    }
+
+    private void FirewallRemoveRow_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is FirewallRow row) _firewall.RemoveCustom(row);
+    }
+
+    private async void FirewallApply_Click(object sender, RoutedEventArgs e) => await ApplyFirewallAsync(removeAll: false);
+
+    private async void FirewallRemoveAll_Click(object sender, RoutedEventArgs e) => await ApplyFirewallAsync(removeAll: true);
+
+    /// <summary>
+    /// Plans against a fresh read of the firewall, refuses what would lock the user out, asks, then runs the
+    /// elevated helper and reports what's really in place afterwards.
+    /// </summary>
+    private async Task ApplyFirewallAsync(bool removeAll)
+    {
+        // async void callers: nothing may escape.
+        try
+        {
+            _firewall.IsBusy = true;
+            var (status, sockets, remote, rdpPort) = await Task.Run(() =>
+                (WindowsFirewall.ReadStatus(), SocketSnapshot.Read(), FirewallSafety.IsRemoteSession(), FirewallSafety.RdpPort()));
+            if (!status.Readable)
+            {
+                MessageBox.Show(this, status.Error, "Firewall", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var plan = removeAll ? FirewallPlan.Create(status, []) : _firewall.Plan(status)!;
+            if (plan.IsEmpty)
+            {
+                MessageBox.Show(this, "The firewall already matches what's ticked.", "Firewall", MessageBoxButton.OK, MessageBoxImage.Information);
+                _firewall.Load(status, sockets, ProcessName);
+                return;
+            }
+
+            var issues = FirewallSafety.Check(plan.Add.Concat(plan.Repair), sockets, ProcessName, remote, rdpPort)
+                .Concat(FirewallSafety.CheckRevocations(plan.Touched(status), remote, rdpPort)).ToList();
+            if (issues.Where(i => i.Blocking).ToList() is { Count: > 0 } refused)
+            {
+                MessageBox.Show(this, "AgentReclaim won't apply this:\n\n" + string.Join("\n", refused.Select(i => "• " + i.Text)) +
+                                      "\n\nUntick that port (or change its direction) and apply again.",
+                    "Firewall change refused", MessageBoxButton.OK, MessageBoxImage.Stop);
+                return;
+            }
+
+            var text = new StringBuilder();
+            if (plan.Add.Count > 0) text.AppendLine("Block:").AppendJoin("", plan.Add.Select(r => $"  • {r.Describe()}\n"));
+            if (plan.RemovalLines(status) is { Count: > 0 } removals)
+                text.AppendLine("Replace or remove:").AppendJoin("", removals.Select(line => $"  • {line}\n"));
+            if (plan.Blocked.Count > 0)
+                text.AppendLine("Skipped (a rule AgentReclaim didn't create has the same name):").AppendJoin("", plan.Blocked.Select(r => $"  • {r.Describe()}\n"));
+            if (issues.Count > 0)
+            {
+                text.AppendLine().AppendLine("Heads up:");
+                foreach (var issue in issues) text.AppendLine($"  • {issue.Text}");
+            }
+            text.AppendLine()
+                .AppendLine("Windows will ask for administrator permission. Block rules win over allow rules (except IPsec authenticated-bypass rules); localhost keeps working.");
+            if (!status.OnForCurrentNetworks) text.AppendLine("Windows Firewall is off for the network you're on: these rules do nothing until it's on.");
+            if (MessageBox.Show(this, text.ToString(), removeAll ? "Remove AgentReclaim's firewall blocks" : "Change the firewall",
+                    MessageBoxButton.YesNo, issues.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+                return;
+
+            var result = await FirewallChange.ApplyLoggedAsync(plan, _log, removeAll ? "manual: firewall remove all" : "manual: firewall",
+                request => FirewallChange.RunElevatedAsync(Environment.ProcessPath!, request), WindowsFirewall.ReadStatus);
+            _viewModel.AddActivity(result.Message);
+            if (!result.Success) MessageBox.Show(this, result.Message, "Firewall", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("Firewall change failed", ex);
+            _viewModel.AddActivity($"Firewall change failed: {ex.Message}");
+        }
+        finally
+        {
+            _firewall.IsBusy = false;
+        }
+        await RefreshFirewallAsync();
     }
 
     // ---- Settings: integrations ----

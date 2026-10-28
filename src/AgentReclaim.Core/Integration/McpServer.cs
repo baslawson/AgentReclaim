@@ -153,11 +153,11 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
     private static JsonArray Tools() =>
     [
         Tool("resource_overview",
-            "System memory/CPU, how much Claude Code and Codex sessions use, leftovers from exited sessions, and findings such as piles of idle child processes or a growing agent.",
+            "System memory/CPU, how much Claude Code, Codex and Gemini CLI sessions use, leftovers from exited sessions, and findings such as piles of idle child processes or a growing agent.",
             new JsonObject()),
         Tool("list_session_processes",
             "Processes running under one live agent session (the biggest first). Without agent_pid, lists the sessions.",
-            new JsonObject { ["agent_pid"] = new JsonObject { ["type"] = "integer", ["description"] = "PID of claude.exe / codex.exe" } }),
+            new JsonObject { ["agent_pid"] = new JsonObject { ["type"] = "integer", ["description"] = "PID of the agent (claude.exe, codex.exe, or node.exe running an npm-installed agent such as Gemini CLI)" } }),
         Tool("list_leftovers",
             "Process trees left behind by exited agent sessions, with memory, ports and command lines. Stopping them is done by the user in the AgentReclaim app.",
             new JsonObject()),

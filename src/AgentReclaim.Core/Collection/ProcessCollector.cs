@@ -101,7 +101,10 @@ public sealed class ProcessCollector
             workingSet,
             cpuPercent,
             tcp.ListeningPorts.TryGetValue(pid, out var ports) ? ports.ToArray() : [],
-            tcp.Established.GetValueOrDefault(pid));
+            tcp.Established.GetValueOrDefault(pid))
+        {
+            UdpPorts = tcp.UdpPorts.TryGetValue(pid, out var udp) ? udp.ToArray() : [],
+        };
     }
 
     /// <summary>

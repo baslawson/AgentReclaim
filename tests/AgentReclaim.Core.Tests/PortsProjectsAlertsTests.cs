@@ -284,6 +284,23 @@ public class AgentScopeTests
     }
 
     [Fact]
+    public void A_nested_agent_launched_unusually_never_hands_its_server_the_outer_agents_scope()
+    {
+        // claude (10) → codex under node (20) → cmd (21) → mcp (22): the caller is codex, not claude.
+        var codex = Proc(20, 10, "node.exe", startMinute: 16);
+        var cmd = Proc(21, 20, "cmd.exe", startMinute: 17);
+        var mcp = Proc(22, 21, "AgentReclaim.exe", startMinute: 18);
+        (ProcessKey, int, string)[] table = [Row(Proc(1, 0, "explorer.exe")), Row(Claude), Row(codex), Row(cmd), Row(mcp)];
+
+        // An option whose value comes as the next argument: still recognized.
+        var titled = AgentScope.Identify(22, table, pid => pid == 20 ? "node --title nested C:/npm/node_modules/@openai/codex/bin/codex.js" : null);
+        Assert.Equal((codex.Key, AgentKind.Codex), (titled!.Agent, titled.Kind));
+
+        // One AgentReclaim doesn't know: no caller, rather than claude.
+        Assert.Null(AgentScope.Identify(22, table, pid => pid == 20 ? "node --some-new-flag x C:/npm/node_modules/@openai/codex/bin/codex.js" : null));
+    }
+
+    [Fact]
     public void A_reused_parent_pid_or_no_agent_means_no_caller()
     {
         var youngerParent = Proc(14, 10, "cmd.exe", startMinute: 20); // started after the MCP server: not its parent

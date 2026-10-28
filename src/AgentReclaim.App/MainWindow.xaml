@@ -109,7 +109,7 @@
                     </DataGrid>
                     <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
                                Foreground="{DynamicResource Muted}" TextWrapping="Wrap" MaxWidth="460"
-                               Text="Nothing left behind. Processes that Claude Code or Codex started and then abandoned will show up here."
+                               Text="Nothing left behind. Processes that Claude Code, Codex or Gemini CLI started and then abandoned will show up here."
                                Visibility="{Binding HasNoOrphans, Converter={StaticResource BoolToVisibility}}" />
                 </Grid>
             </TabItem>
@@ -130,6 +130,8 @@
                                     <TextBlock FontWeight="SemiBold" Text="{Binding Title}" />
                                     <TextBlock Text="{Binding Summary}" />
                                     <TextBlock Style="{StaticResource StatLabel}" Text="{Binding Started}" />
+                                    <TextBlock Text="{Binding StuckText}" Foreground="{DynamicResource Accent}" FontWeight="SemiBold"
+                                               Visibility="{Binding HasStuck, Converter={StaticResource BoolToVisibility}}" />
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -147,6 +149,17 @@
                                 <DataGridTextColumn Header="CPU" Binding="{Binding Cpu}" SortMemberPath="CpuValue" />
                                 <DataGridTextColumn Header="Idle" Binding="{Binding Idle}" />
                                 <DataGridTextColumn Header="Ports" Binding="{Binding Ports}" />
+                                <DataGridTemplateColumn Header="Status">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Visibility="{Binding IsStuck, Converter={StaticResource BoolToVisibility}}">
+                                                <TextBlock Text="{Binding Status}" Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="2,0,6,0" />
+                                                <Button Content="Stop…" Padding="10,2" Margin="2" Click="StopStuck_Click"
+                                                        Visibility="{Binding CanStop, Converter={StaticResource BoolToVisibility}}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
                                 <DataGridTextColumn Header="Command line" Binding="{Binding CommandLine}" Width="*" />
                             </DataGrid.Columns>
                         </DataGrid>
@@ -170,7 +183,7 @@
                     </DataGrid>
                     <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
                                Foreground="{DynamicResource Muted}" TextWrapping="Wrap" MaxWidth="460"
-                               Text="No Claude Code or Codex sessions or leftovers right now. They are grouped here by the git repo (or folder) they run in."
+                               Text="No Claude Code, Codex or Gemini CLI sessions or leftovers right now. They are grouped here by the git repo (or folder) they run in."
                                Visibility="{Binding HasNoProjects, Converter={StaticResource BoolToVisibility}}" />
                 </Grid>
             </TabItem>
@@ -183,7 +196,7 @@
                         <TextBox x:Name="PortFilter" DockPanel.Dock="Left" Width="160" TextChanged="PortFilter_TextChanged"
                                  ToolTip="A port number, process name, PID or project" />
                         <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" Style="{StaticResource StatLabel}" TextWrapping="Wrap"
-                                   Text="Every listening TCP port, Claude Code and Codex first. Free… stops the process holding it and its children (a leftover's whole tree), with the same checks and log as Stop… on Leftovers." />
+                                   Text="Every listening TCP port, AI agents first. Free… stops the process holding it and its children (a leftover's whole tree), with the same checks and log as Stop… on Leftovers." />
                     </DockPanel>
                     <DataGrid x:Name="PortsGrid" ItemsSource="{Binding Ports}" Style="{DynamicResource Grid}">
                         <DataGrid.Columns>
@@ -201,6 +214,101 @@
                             <DataGridTextColumn Header="Project" Binding="{Binding Project}" />
                             <DataGridTextColumn Header="Memory" Binding="{Binding Memory}" SortMemberPath="MemoryBytes" />
                             <DataGridTextColumn Header="Command line" Binding="{Binding CommandLine}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
+            <!-- Firewall: block ports with Windows Firewall rules (nothing until the user ticks and applies) -->
+            <TabItem Header="Firewall" x:Name="FirewallTab">
+                <DockPanel Margin="4">
+                    <Border DockPanel.Dock="Top" Style="{StaticResource StatCard}" Margin="0,0,0,10">
+                        <StackPanel>
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="Reload" Padding="10,3" Click="FirewallReload_Click" IsEnabled="{Binding IsIdle}"
+                                        ToolTip="Read the firewall again (discards ticks you haven't applied)" />
+                                <TextBlock FontWeight="SemiBold" Text="Block ports with Windows Firewall" VerticalAlignment="Center" />
+                            </DockPanel>
+                            <TextBlock Style="{StaticResource StatLabel}" Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,2,0,4" />
+                            <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="0,0,0,8"
+                                       Text="Nothing is blocked until you tick it and click Apply (Windows asks for administrator permission). Block rules win over allow rules (except IPsec authenticated-bypass rules). Programs on this PC can still reach each other through localhost: the firewall doesn't filter that. WSL's mirrored networking and Docker's own networks can have separate firewalls." />
+                            <ItemsControl ItemsSource="{Binding Presets}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <CheckBox Content="{Binding Name}" ToolTip="{Binding Why}" Margin="0,0,16,4" IsThreeState="False"
+                                                  IsChecked="{Binding IsChecked, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                    <Border DockPanel.Dock="Bottom" Style="{StaticResource StatCard}" Margin="0,10,0,0">
+                        <StackPanel>
+                            <WrapPanel>
+                                <TextBlock Text="Add a port:" VerticalAlignment="Center" Margin="0,0,8,4" />
+                                <TextBox x:Name="CustomPort" Width="110" Margin="0,0,8,4" ToolTip="A port (1–65535) or a range like 8000-8010" />
+                                <ComboBox x:Name="CustomProtocol" Width="110" Margin="0,0,8,4" SelectedIndex="0">
+                                    <ComboBoxItem Content="TCP" />
+                                    <ComboBoxItem Content="UDP" />
+                                    <ComboBoxItem Content="TCP+UDP" />
+                                </ComboBox>
+                                <ComboBox x:Name="CustomDirection" Width="122" Margin="0,0,8,4" SelectedIndex="0">
+                                    <ComboBoxItem Content="Incoming" />
+                                    <ComboBoxItem Content="Outgoing" />
+                                    <ComboBoxItem Content="Both" />
+                                </ComboBox>
+                                <Button Content="Add" Padding="10,3" Margin="0,0,24,4" Click="FirewallAdd_Click" IsEnabled="{Binding IsIdle}" />
+                                <Button Content="Apply…" Padding="14,3" Margin="0,0,8,4" FontWeight="SemiBold" Click="FirewallApply_Click" IsEnabled="{Binding CanApply}" />
+                                <Button Content="Remove all AgentReclaim blocks…" Padding="10,3" Margin="0,0,8,4" Click="FirewallRemoveAll_Click" IsEnabled="{Binding CanRemoveAll}" />
+                            </WrapPanel>
+                            <TextBlock Style="{StaticResource StatLabel}" Text="{Binding Pending}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <DataGrid ItemsSource="{Binding Rows}" Style="{DynamicResource Grid}">
+                        <DataGrid.Resources>
+                            <Style x:Key="Middle" TargetType="TextBlock">
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="Margin" Value="2,0,8,0" />
+                            </Style>
+                        </DataGrid.Resources>
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="Block" Width="Auto">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center" Margin="6,2"
+                                                  AutomationProperties.Name="{Binding Service}"
+                                                  IsChecked="{Binding IsChecked, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  IsEnabled="{Binding DataContext.IsIdle, RelativeSource={RelativeSource AncestorType=DataGrid}}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Service" ElementStyle="{StaticResource Middle}" Binding="{Binding Service}" FontWeight="SemiBold" />
+                            <DataGridTextColumn Header="Port" ElementStyle="{StaticResource Middle}" Binding="{Binding PortsText}" SortMemberPath="Ports.From" />
+                            <DataGridTextColumn Header="Protocol" ElementStyle="{StaticResource Middle}" Binding="{Binding ProtocolText}" />
+                            <DataGridTemplateColumn Header="Direction" Width="Auto">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox Width="122" Margin="2,1" Padding="6,1" ItemsSource="{x:Static local:FirewallRow.DirectionNames}"
+                                                  SelectedIndex="{Binding DirectionIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  IsEnabled="{Binding DataContext.IsIdle, RelativeSource={RelativeSource AncestorType=DataGrid}}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Group" ElementStyle="{StaticResource Middle}" Binding="{Binding Group}" />
+                            <DataGridTextColumn Header="Status" ElementStyle="{StaticResource Middle}" Binding="{Binding Status}" Width="*" />
+                            <DataGridTemplateColumn Header="" Width="Auto">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="Remove" Padding="8,1" Margin="2" Click="FirewallRemoveRow_Click"
+                                                Visibility="{Binding IsCustom, Converter={StaticResource BoolToVisibility}}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
                 </DockPanel>
@@ -406,7 +514,7 @@
 
                         <CheckBox Content="Stop leftovers automatically" IsChecked="{Binding AutoStopLeftovers}" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
-                                   Text="Only leftovers that were seen running under Claude Code or Codex, have no open network connections, pass the safety checks, and have been idle long enough. Guessed owners always wait for you." />
+                                   Text="Only leftovers that were seen running under Claude Code, Codex or Gemini CLI, have no open network connections, pass the safety checks, and have been idle long enough. Guessed owners always wait for you." />
                         <StackPanel Orientation="Horizontal" Margin="20,4,0,0">
                             <TextBlock Text="Idle for at least" VerticalAlignment="Center" />
                             <TextBox Text="{Binding AutoStopIdleMinutes, UpdateSourceTrigger=LostFocus}" />
@@ -414,6 +522,11 @@
                             <TextBox Text="{Binding HookGraceSeconds, UpdateSourceTrigger=LostFocus}" />
                             <TextBlock Text="seconds after the Claude Code hook reports the session ended)" VerticalAlignment="Center" />
                         </StackPanel>
+
+                        <CheckBox Content="Stop commands that may be stuck (no activity)" IsChecked="{Binding AutoStopStuckWaiting}" />
+                        <CheckBox Content="Stop commands that may be stuck (a whole CPU core busy)" IsChecked="{Binding AutoStopStuckSpinning}" Margin="0,4,0,0" />
+                        <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,4,0,0"
+                                   Text="Uses the times under Notifications below. Stops the command and what it started, never an agent, nothing using a TCP or UDP port (a server) or with an open connection, and each only once; the agent sees the command fail and can run it again. A watcher with no port (tsc --watch, say) also looks idle, and a long build looks busy. You're told each time." />
 
                         <CheckBox Content="Throttle runaway builds and tests" IsChecked="{Binding AutoThrottleBuilds}" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
@@ -449,6 +562,19 @@
                         <CheckBox Content="Tell me when an agent leaves something running" IsChecked="{Binding NotifyNewLeftovers}" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
                                    Text="For example &quot;Claude Code left node.exe running on port 5173 (shop)&quot;. Only processes that were seen under an agent, once they've outlived it for a few seconds. It doesn't stop anything." />
+                        <CheckBox Content="Tell me when something in a session may be stuck" IsChecked="{Binding NotifyStuck}" />
+                        <StackPanel Orientation="Horizontal" Margin="20,4,0,0">
+                            <TextBlock Text="A command an agent started, with no activity for" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding StuckWaitingMinutes, UpdateSourceTrigger=LostFocus}" />
+                            <TextBlock Text="minutes" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="20,4,0,0">
+                            <TextBlock Text="Anything in a session keeping a whole CPU core busy for" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding StuckSpinningMinutes, UpdateSourceTrigger=LostFocus}" />
+                            <TextBlock Text="minutes" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
+                                   Text="Shown on the Sessions and Findings tabs either way; this only adds a notification. A command waiting for a password or yes/no prompt nobody can see looks like this, and so does a loop. It's a guess from CPU use, and nothing is stopped: Stop… on the Sessions tab ends a stuck command (never the agent itself)." />
 
                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="Disk cleanup" Margin="0,20,0,0" />
                         <StackPanel Orientation="Horizontal" Margin="0,6,0,0">

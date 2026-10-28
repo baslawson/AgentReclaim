@@ -4,8 +4,15 @@ namespace AgentReclaim.Core.Analysis;
 
 public sealed record AnalyzerOptions
 {
-    /// <summary>CPU at or above this counts as "doing something".</summary>
+    /// <summary>
+    /// CPU (a share of the whole machine) at or above this counts as "doing something", or at or above
+    /// <see cref="ActiveCorePercent"/> of one core, whichever is lower: on a machine with many cores a process
+    /// keeping a whole core busy is under 0.5% of it.
+    /// </summary>
     public double ActiveCpuPercent { get; init; } = 0.5;
+
+    /// <summary>Share of one core that always counts as activity (no change up to 16 cores).</summary>
+    public double ActiveCorePercent { get; init; } = 8;
 
     /// <summary>Children of a live agent older than this and currently idle count toward a "stale pile" finding.</summary>
     public TimeSpan StaleChildAge { get; init; } = TimeSpan.FromMinutes(30);
@@ -23,6 +30,26 @@ public sealed record AnalyzerOptions
     public TimeSpan LeakMinWindow { get; init; } = TimeSpan.FromMinutes(20);
     public long LeakMinGrowthBytes { get; init; } = 500L << 20;
     public double LeakMinGrowthRatio { get; init; } = 0.5;
+
+    /// <summary>A tool an agent started that's shown no activity this long may be stuck (null: don't look).</summary>
+    public TimeSpan? StuckWaitingAfter { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>A process in a session that's kept a whole CPU core busy this long may be stuck in a loop (null: don't look).</summary>
+    public TimeSpan? StuckSpinningAfter { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>Share of one core that counts as "a whole core".</summary>
+    public double SpinningCorePercent { get; init; } = 90;
+
+    /// <summary>A dip under that share shorter than this doesn't restart the clock (builds fluctuate).</summary>
+    public TimeSpan SpinningGap { get; init; } = TimeSpan.FromSeconds(30);
+
+    public int CoreCount { get; init; } = Environment.ProcessorCount;
+
+    /// <summary>
+    /// Children started this soon after their agent are its standing helpers (MCP servers, plugins), which sit idle
+    /// by design, not tool calls.
+    /// </summary>
+    public TimeSpan AgentStartupGrace { get; init; } = TimeSpan.FromMinutes(2);
 }
 
 /// <summary>
@@ -34,6 +61,9 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
     private AnalyzerOptions _options = options ?? new AnalyzerOptions();
     private readonly Dictionary<ProcessKey, (DateTime FirstSeen, DateTime LastActive)> _activity = new();
     private readonly Dictionary<ProcessKey, List<(DateTime Time, long Bytes)>> _agentMemory = new();
+    private readonly Dictionary<ProcessKey, (DateTime Since, DateTime LastHigh)> _busy = new(); // a whole core busy since
+    // A tool's whole tree: last seen active (a member busy, or one starting or exiting) and who was in it.
+    private readonly Dictionary<ProcessKey, (DateTime LastActive, string Members)> _toolActivity = new();
 
     /// <summary>Swapped in when the user changes settings; only read on the polling thread.</summary>
     public AnalyzerOptions Options
@@ -50,10 +80,14 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
 
         UpdateActivity(snapshot);
 
-        // A parent only counts if it started before the child; otherwise the PID was reused.
+        // A parent only counts if it started before the child; otherwise the PID was reused. When either start
+        // time can't be read (system processes, for a non-admin app) that can't be checked, so there's no parent:
+        // Windows reuses PIDs, and wininit.exe's long-gone parent PID once belonged to an agent's child, which
+        // made every system service look like part of that session.
         ProcessInfo? ParentOf(ProcessInfo p) =>
             p.ParentPid != p.Pid && byPid.TryGetValue(p.ParentPid, out var parent)
-            && (parent.StartTimeUtc <= p.StartTimeUtc || p.StartTimeUtc == DateTime.MinValue)
+            && p.StartTimeUtc != DateTime.MinValue && parent.StartTimeUtc != DateTime.MinValue
+            && parent.StartTimeUtc <= p.StartTimeUtc
                 ? parent
                 : null;
 
@@ -174,9 +208,10 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
             lineage.RetainOnly(snapshot.Processes.Select(p => p.Key).ToHashSet());
         lineage.SaveIfDirty();
 
-        var findings = FindLeaks(sessions, now).Concat(FindStalePiles(sessions, now)).ToList();
+        var stuck = FindStuck(sessions, now);
+        var findings = FindLeaks(sessions, now).Concat(FindStalePiles(sessions, now)).Concat(stuck.Select(Describe)).ToList();
         foreach (var p in snapshot.Processes) Build(p);
-        return new AnalysisResult(snapshot, sessions, orphans, findings) { Nodes = built };
+        return new AnalysisResult(snapshot, sessions, orphans, findings) { Nodes = built, Stuck = stuck };
     }
 
     /// <summary>
@@ -231,7 +266,7 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
                 .Where(n => n != session.Root
                             && n.Process.StartTimeUtc != DateTime.MinValue
                             && now - n.Process.StartTimeUtc >= _options.StaleChildAge
-                            && n.Process.CpuPercent < _options.ActiveCpuPercent)
+                            && !IsActive(n.Process))
                 .GroupBy(n => n.Process.Name, StringComparer.OrdinalIgnoreCase)
                 .Where(g => g.Count() >= _options.StaleChildMinCount);
 
@@ -248,6 +283,86 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
         return findings.OrderByDescending(f => f.Bytes).ToList();
     }
 
+
+    /// <summary>
+    /// Processes in live sessions that may be stuck. Waiting: a tool the agent started (not one of its standing
+    /// helpers, not a server) whose whole tree has shown no CPU activity for a long time, e.g. a command waiting for
+    /// a password or yes/no prompt nobody can see. Spinning: anything in the session, the agent included, that's
+    /// kept a whole core busy without a break. An agent idle at its own prompt is normal, so agents themselves are
+    /// only ever reported as spinning.
+    /// </summary>
+    private List<StuckProcess> FindStuck(IReadOnlyList<AgentSession> sessions, DateTime now)
+    {
+        var stuck = new List<StuckProcess>();
+        var tracked = new HashSet<ProcessKey>();
+        foreach (var session in sessions)
+        {
+            var nodes = session.Root.SelfAndDescendants().Select(x => x.Node).ToList();
+
+            if (_options.StuckSpinningAfter is { } spinAfter)
+            {
+                foreach (var node in nodes)
+                {
+                    if (_busy.TryGetValue(node.Process.Key, out var busy) && busy.LastHigh == now && now - busy.Since >= spinAfter)
+                        stuck.Add(new StuckProcess(session, node, StuckKind.Spinning, now - busy.Since));
+                }
+            }
+
+            // Already reported as a pile of idle children: not repeated one by one.
+            var piled = nodes.Where(n => n != session.Root && n.Process.StartTimeUtc != DateTime.MinValue
+                                         && now - n.Process.StartTimeUtc >= _options.StaleChildAge && !IsActive(n.Process))
+                .GroupBy(n => n.Process.Name, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() >= _options.StaleChildMinCount).Select(g => g.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var agent in nodes.Where(n => AgentSignatures.AgentRootKind(n.Process) is not null))
+            foreach (var tool in agent.Children)
+            {
+                var p = tool.Process;
+                if (AgentSignatures.AgentRootKind(p) is not null) continue;
+
+                // Tracked for every tool, whether or not it can be reported now (a server, the setting off): a busy
+                // child that has since exited was activity too. Without this, a shell whose build just finished would
+                // count as idle for as long as the shell itself had been.
+                var tree = tool.SelfAndDescendants().Select(x => x.Node).ToList();
+                var members = string.Join(';', tree.Select(n => $"{n.Process.Key.Pid}:{n.Process.Key.StartTicks}").Order());
+                var active = now - tree.Min(n => n.IdleFor);
+                if (_toolActivity.TryGetValue(p.Key, out var seen))
+                    active = seen.Members == members ? (seen.LastActive > active ? seen.LastActive : active) : now;
+                _toolActivity[p.Key] = (active, members);
+                tracked.Add(p.Key);
+
+                if (_options.StuckWaitingAfter is not { } waitAfter || piled.Contains(p.Name)) continue;
+                if (string.Equals(p.Name, "conhost.exe", StringComparison.OrdinalIgnoreCase)) continue; // the console host, always idle
+                if (p.StartTimeUtc == DateTime.MinValue || agent.Process.StartTimeUtc == DateTime.MinValue
+                    || p.StartTimeUtc - agent.Process.StartTimeUtc < _options.AgentStartupGrace) continue;
+                if (tree.Any(n => n.Process.ListeningPorts.Count > 0 || n.Process.UdpPorts.Count > 0)) continue; // a server: idle between requests by design
+                var idle = now - active;
+                if (idle >= waitAfter && stuck.All(s => s.Node != tool))
+                    stuck.Add(new StuckProcess(session, tool, StuckKind.Waiting, idle));
+            }
+        }
+        foreach (var key in _toolActivity.Keys.Where(k => !tracked.Contains(k)).ToList())
+            _toolActivity.Remove(key);
+        return stuck;
+    }
+
+    private static Finding Describe(StuckProcess s)
+    {
+        var p = s.Node.Process;
+        var agent = $"{AgentSignatures.DisplayName(s.Session.Kind)} (pid {s.Session.Root.Process.Pid})";
+        return s.Kind == StuckKind.Waiting
+            ? new Finding($"{p.Name} (pid {p.Pid}) under {agent} may be stuck: no activity for {(int)s.For.TotalMinutes} min",
+                "A command the agent started that has done nothing since. It may be waiting for input nobody can see (a password or a yes/no prompt), or hung. " +
+                "Check the agent's terminal; Stop… on the Sessions tab ends it, and the agent sees the command fail.",
+                s.Node.TotalPrivateBytes, FindingKind.Stuck)
+            : new Finding($"{p.Name} (pid {p.Pid}) under {agent} may be stuck: a whole CPU core busy for {(int)s.For.TotalMinutes} min",
+                "It hasn't let up since. Long builds and tests do this too; if it shouldn't take this long, it may be stuck in a loop. " +
+                "Stop… on the Sessions tab ends it (an agent itself is never stopped by AgentReclaim).",
+                s.Node.TotalPrivateBytes, FindingKind.Stuck);
+    }
+    private bool IsActive(ProcessInfo p) =>
+        p.CpuPercent >= Math.Min(_options.ActiveCpuPercent, _options.ActiveCorePercent / Math.Max(1, _options.CoreCount));
+
     private void UpdateActivity(ProcessSnapshot snapshot)
     {
         var now = snapshot.TakenAtUtc;
@@ -257,12 +372,22 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
             alive.Add(p.Key);
             if (!_activity.TryGetValue(p.Key, out var state))
                 _activity[p.Key] = (now, now);
-            else if (p.CpuPercent >= _options.ActiveCpuPercent)
+            else if (IsActive(p))
                 _activity[p.Key] = (state.FirstSeen, now);
+
+            // CPU is a share of the whole machine; a whole core is 100 / cores of it.
+            if (p.CpuPercent >= _options.SpinningCorePercent / Math.Max(1, _options.CoreCount))
+            {
+                _busy[p.Key] = _busy.TryGetValue(p.Key, out var busy) && now - busy.LastHigh <= _options.SpinningGap
+                    ? (busy.Since, now)
+                    : (now, now);
+            }
         }
 
         foreach (var key in _activity.Keys.Where(k => !alive.Contains(k)).ToList())
             _activity.Remove(key);
+        foreach (var key in _busy.Keys.Where(k => !alive.Contains(k) || now - _busy[k].LastHigh > _options.SpinningGap).ToList())
+            _busy.Remove(key);
     }
 
     private TimeSpan IdleFor(ProcessKey key, DateTime now) =>

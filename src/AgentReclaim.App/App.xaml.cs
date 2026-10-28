@@ -61,6 +61,14 @@ public partial class App : Application
         foreach (var entry in log.ReadRecent(100).Where(x => x.Phase == "done").Reverse())
             viewModel.AddActivity(entry.Message, entry, entry.TimeUtc);
 
+        try
+        {
+            File.Delete(AppPaths.LegacyLineageFile); // untrusted: see AppPaths.LineageFile
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Warning("Couldn't delete the old lineage file", ex);
+        }
         _monitor = new MonitorService(new ProcessCollector(), new Analyzer(new LineageStore(AppPaths.LineageFile)),
             new AutoRuleEngine(), terminator, () => Volatile.Read(ref _published), new MemoryHistory(AppPaths.HistoryFile), logTail);
         _updates = new UpdateService(
@@ -91,7 +99,12 @@ public partial class App : Application
             viewModel.AddActivity(notice.Text);
             _tray.ShowMessage(notice.Title, notice.Text + " Click to open AgentReclaim.", isError: false);
         });
-        _monitor.HistoryUpdated += () => Dispatcher.BeginInvoke(() => _window?.RefreshHistory());
+        _monitor.StuckFound += notice => Dispatcher.BeginInvoke(() =>
+        {
+            viewModel.AddActivity(notice.Text);
+            _tray.ShowMessage(notice.Title, notice.Text + " Click to open AgentReclaim.", isError: false);
+        });
+        _monitor.HistoryUpdated +=() => Dispatcher.BeginInvoke(() => _window?.RefreshHistory());
         _monitor.Failed += ex =>
         {
             Log.Error("Monitoring poll failed", ex);

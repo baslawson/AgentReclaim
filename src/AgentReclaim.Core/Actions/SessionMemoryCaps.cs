@@ -35,7 +35,7 @@ public sealed class SessionMemoryCaps : IDisposable
     /// it waits for a later poll instead of being capped and staying capped (a process can't leave a job).
     /// </summary>
     internal static bool Eligible(ProcessInfo p) =>
-        AgentSignatures.AgentRootKind(p) is null
+        !AgentSignatures.MightBeAgent(p)
         && !SafetyPolicy.IsProtected(p.Name)
         && !p.Name.Equals("conhost.exe", StringComparison.OrdinalIgnoreCase)
         && !(p.CommandLine is null && p.Name.Equals("node.exe", StringComparison.OrdinalIgnoreCase));

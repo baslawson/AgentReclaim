@@ -92,6 +92,37 @@ public sealed class AutoRuleEngine
     /// <summary>Records that a stop was attempted, so a tree that refuses to die isn't retried every poll.</summary>
     public void RecordStopAttempt(OrphanTree tree) => _attemptedStops.Add(tree.Root.Process.Key);
 
+    /// <summary>
+    /// Possibly-stuck commands the opt-in rule may stop now, each with everything it started. Never an agent (nor a
+    /// tree with one in it), nothing on the protected list, nothing that might be an agent (an unreadable node.exe),
+    /// nothing listening on a TCP port or holding a UDP one, nothing with an open connection, and never twice. The
+    /// agent sees the command fail and can run it again; AgentReclaim never restarts it itself (that would run it a
+    /// second time, outside the agent).
+    /// </summary>
+    public IReadOnlyList<StuckProcess> StuckToStop(AnalysisResult result, AppSettings settings, int selfPid)
+    {
+        if (!settings.AutoStopStuckWaiting && !settings.AutoStopStuckSpinning) return [];
+        if (!result.Snapshot.NetworkComplete) return []; // can't tell whether something is still talking to it
+
+        return result.Stuck
+            .Where(s => s.Kind == StuckKind.Waiting ? settings.AutoStopStuckWaiting : settings.AutoStopStuckSpinning)
+            .Where(s => !_attemptedStops.Contains(s.Node.Process.Key))
+            .Where(s => s.Node.SelfAndDescendants().All(x => x.Node.Process.EstablishedConnections == 0
+                && x.Node.Process.ListeningPorts.Count == 0 && x.Node.Process.UdpPorts.Count == 0))
+            .Where(s => SafetyPolicy.CheckSubtree(s.Node, selfPid, requireKnownNodes: true).Allowed)
+            .ToList();
+    }
+
+    public void RecordStopAttempt(StuckProcess stuck) => _attemptedStops.Add(stuck.Node.Process.Key);
+
+    /// <summary>
+    /// Do the settings now (possibly changed since the poll began) still ask for this stop? Its kind's switch must be
+    /// on and its time reached under the current setting.
+    /// </summary>
+    public static bool StillWanted(StuckProcess stuck, AppSettings now) => stuck.Kind == StuckKind.Waiting
+        ? now.AutoStopStuckWaiting && stuck.For >= TimeSpan.FromMinutes(Math.Max(1, now.StuckWaitingMinutes))
+        : now.AutoStopStuckSpinning && stuck.For >= TimeSpan.FromMinutes(Math.Max(1, now.StuckSpinningMinutes));
+
     public IReadOnlyList<PlannedThrottle> ProcessesToThrottle(AnalysisResult result, AppSettings settings)
     {
         var now = result.Snapshot.TakenAtUtc;
@@ -105,7 +136,7 @@ public sealed class AutoRuleEngine
                 var p = node.Process;
                 alive.Add(p.Key);
                 if (depth == 0 || !ThrottleableNames.Contains(p.Name)) continue;
-                if (AgentSignatures.AgentRootKind(p) is not null) continue;
+                if (AgentSignatures.MightBeAgent(p)) continue;
 
                 if (p.CpuPercent >= settings.ThrottleCpuPercent)
                     _busySince.TryAdd(p.Key, now);

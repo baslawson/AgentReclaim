@@ -17,6 +17,11 @@ public static class SafetyPolicy
         "code.exe", "cursor.exe", "windsurf.exe", "devenv.exe", "rider64.exe", "idea64.exe",
         "windowsterminal.exe", "openconsole.exe", "wsl.exe", "wslservice.exe", "vmmem", "vmmemwsl",
         "docker desktop.exe", "com.docker.backend.exe",
+        // More of Windows itself (also blocked by their unreadable start times, but never by name alone either).
+        "secure system", "memory compression", "lsaiso.exe", "spoolsv.exe", "wmiprvse.exe", "wmiapsrv.exe", "dllhost.exe",
+        "searchindexer.exe", "searchhost.exe", "msmpeng.exe", "nissrv.exe", "mpdefendercoreservice.exe", "securityhealthservice.exe",
+        "audiodg.exe", "ctfmon.exe", "taskhostw.exe", "runtimebroker.exe", "vmcompute.exe", "startmenuexperiencehost.exe",
+        "shellexperiencehost.exe", "textinputhost.exe", "lockapp.exe", "userinit.exe", "logonui.exe",
     };
 
     /// <summary>System processes, IDEs, terminals and WSL/Docker: never stopped, and never memory-capped.</summary>
@@ -46,7 +51,11 @@ public static class SafetyPolicy
             return Blocked("This tree contains AgentReclaim itself.");
         if (nodes.FirstOrDefault(n => ProtectedNames.Contains(n.Process.Name)) is { } protectedNode)
             return Blocked($"{protectedNode.Process.Name} is on the protected list.");
-        if (nodes.FirstOrDefault(n => AgentSignatures.AgentRootKind(n.Process) is not null) is { } agent)
+        // Without a start time a PID can't be told apart from a later process that reused it, and Windows hides
+        // start times only for processes AgentReclaim shouldn't touch anyway (other users', system services).
+        if (nodes.FirstOrDefault(n => n.Process.StartTimeUtc == DateTime.MinValue) is { } unverifiable)
+            return Blocked($"Couldn't read when {unverifiable.Process.Name} (pid {unverifiable.Process.Pid}) started, so AgentReclaim can't be sure it's the process it saw (it may be a system or another user's process).");
+        if (nodes.FirstOrDefault(n => AgentSignatures.MightBeAgent(n.Process)) is { } agent)
             return Blocked($"{agent.Process.Name} (pid {agent.Process.Pid}) is an agent itself, which AgentReclaim never stops.");
         if (requireKnownNodes && nodes.FirstOrDefault(n => n.Process.CommandLine is null
                 && n.Process.Name.Equals("node.exe", StringComparison.OrdinalIgnoreCase)) is { } unknown)

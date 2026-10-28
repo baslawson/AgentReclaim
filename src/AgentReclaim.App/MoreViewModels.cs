@@ -174,6 +174,11 @@ public sealed class SettingsViewModel(AppSettings settings, Action<AppSettings> 
     public int LowMemoryAlertPercent { get => settings.LowMemoryAlertPercent; set => Set(() => settings.LowMemoryAlertPercent = Math.Clamp(value, 50, 99)); }
     public bool AllowAgentSelfStop { get => settings.AllowAgentSelfStop; set => Set(() => settings.AllowAgentSelfStop = value); }
     public bool NotifyNewLeftovers { get => settings.NotifyNewLeftovers; set => Set(() => settings.NotifyNewLeftovers = value); }
+    public bool NotifyStuck { get => settings.NotifyStuck; set => Set(() => settings.NotifyStuck = value); }
+    public bool AutoStopStuckWaiting { get => settings.AutoStopStuckWaiting; set => Set(() => settings.AutoStopStuckWaiting = value); }
+    public bool AutoStopStuckSpinning { get => settings.AutoStopStuckSpinning; set => Set(() => settings.AutoStopStuckSpinning = value); }
+    public int StuckWaitingMinutes { get => settings.StuckWaitingMinutes; set => Set(() => settings.StuckWaitingMinutes = Math.Clamp(value, 2, 240)); }
+    public int StuckSpinningMinutes { get => settings.StuckSpinningMinutes; set => Set(() => settings.StuckSpinningMinutes = Math.Clamp(value, 2, 240)); }
     public bool CapSessionMemory { get => settings.CapSessionMemory; set => Set(() => settings.CapSessionMemory = value); }
 
     public int SessionMemoryCapGb

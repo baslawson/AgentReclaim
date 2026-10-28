@@ -13,7 +13,12 @@ public static class AppPaths
     public static string DataDirectory { get; } = CustomDataDirectory
         ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentReclaim");
 
-    public static string LineageFile => Path.Combine(DataDirectory, "lineage.json");
+    /// <summary>
+    /// Versions before 0.5 could record system processes as an agent's (a reused PID with an unreadable start time),
+    /// so their lineage.json isn't trusted: this is a new file, and the old one is deleted at startup.
+    /// </summary>
+    public static string LineageFile => Path.Combine(DataDirectory, "lineage-v2.json");
+    public static string LegacyLineageFile => Path.Combine(DataDirectory, "lineage.json");
     public static string ActionLogFile => Path.Combine(DataDirectory, "actions.jsonl");
     public static string SettingsFile => Path.Combine(DataDirectory, "settings.json");
     public static string HistoryFile => Path.Combine(DataDirectory, "history.json");

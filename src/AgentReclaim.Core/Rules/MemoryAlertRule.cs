@@ -60,7 +60,7 @@ public sealed class MemoryAlertRule
         var consumers = Consumers(result, vmBytes);
         var text = $"Memory is {load * 100:0}% full ({Size(system.UsedMemoryBytes)} of {Size(system.TotalMemoryBytes)}).";
         text += consumers.Count == 0
-            ? " Claude Code, Codex and WSL aren't using much of it."
+            ? " Claude Code, Codex, Gemini CLI and WSL aren't using much of it."
             : " Biggest AI-related users: " + string.Join(" · ", consumers.Select(c => $"{c.What} {Size(c.Bytes)}")) + ".";
         var alert = new MemoryAlert("Memory is running low", text, consumers);
         _armed = false;

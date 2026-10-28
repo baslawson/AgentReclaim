@@ -23,6 +23,9 @@ public sealed record ProcessInfo(
     int EstablishedConnections)
 {
     public int Pid => Key.Pid;
+
+    /// <summary>Bound UDP ports: kept apart from <see cref="ListeningPorts"/> (TCP), only to recognize servers.</summary>
+    public IReadOnlyList<int> UdpPorts { get; init; } = [];
 }
 
 public sealed record SystemStats(long TotalMemoryBytes, long AvailableMemoryBytes, double CpuPercent)

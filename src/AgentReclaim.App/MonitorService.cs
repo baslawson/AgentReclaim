@@ -39,6 +39,7 @@ public sealed class MonitorService(
     private readonly ProjectResolver _projects = new();
     private readonly MemoryAlertRule _memoryAlert = new();
     private readonly LeftoverWatch _leftoverWatch = new();
+    private readonly StuckWatch _stuckWatch = new();
     private readonly SessionMemoryCaps _caps = new();
     private int _batchStops;
     private long _batchFreed;
@@ -68,6 +69,9 @@ public sealed class MonitorService(
 
     /// <summary>A leftover appeared (only when that notification is turned on). Raised on the background thread.</summary>
     public event Action<LeftoverNotice>? LeftoverAppeared;
+
+    /// <summary>A process in a session may be stuck (only when that notification is turned on). Raised on the background thread.</summary>
+    public event Action<StuckNotice>? StuckFound;
 
     /// <summary>A new history sample was taken. Raised on the background thread.</summary>
     public event Action? HistoryUpdated;
@@ -143,7 +147,12 @@ public sealed class MonitorService(
     {
         var current = settings();
         var selfPid = Environment.ProcessId;
-        analyzer.Options = analyzer.Options with { DetectLeaks = current.LeakWarnings };
+        analyzer.Options = analyzer.Options with
+        {
+            DetectLeaks = current.LeakWarnings,
+            StuckWaitingAfter = TimeSpan.FromMinutes(Math.Max(1, current.StuckWaitingMinutes)),
+            StuckSpinningAfter = TimeSpan.FromMinutes(Math.Max(1, current.StuckSpinningMinutes)),
+        };
 
         while (_sessionEnds.TryDequeue(out var ended))
             rules.MarkSessionEnded(new ProcessKey(ended.AgentPid, ended.AgentStartTicks), DateTime.UtcNow);
@@ -165,6 +174,12 @@ public sealed class MonitorService(
         {
             Log.Info($"New leftover: {notice.Text}");
             LeftoverAppeared?.Invoke(notice);
+        }
+
+        if (_stuckWatch.Evaluate(result, current.NotifyStuck) is { } stuckNotice)
+        {
+            Log.Info($"Possibly stuck: {stuckNotice.Text}");
+            StuckFound?.Invoke(stuckNotice);
         }
 
         if (_memoryAlert.Evaluate(result, current, DateTime.UtcNow, () => WslManager.VmMemoryBytes(result.Snapshot)) is { } alert)
@@ -191,6 +206,28 @@ public sealed class MonitorService(
 
         // At most one stop per fresh snapshot: a stop can take seconds, and anything planned from this
         // snapshot after it would be acting on stale information. The next poll re-plans.
+        var stuckToStop = rules.StuckToStop(result, current, selfPid);
+        if (stuckToStop.Count > 0 && !Paused)
+        {
+            var stuck = stuckToStop[0];
+            rules.RecordStopAttempt(stuck);
+            var agent = AgentSignatures.DisplayName(stuck.Session.Kind);
+            var why = stuck.Kind == StuckKind.Waiting
+                ? $"no activity for {(int)stuck.For.TotalMinutes} min"
+                : $"a whole CPU core busy for {(int)stuck.For.TotalMinutes} min";
+            Log.Info($"Auto-stop stuck: {stuck.Node.Process.Name} (pid {stuck.Node.Process.Pid}) under {agent}, {why}.");
+            // The terminator re-reads the tree (refusing if it gained processes) and the connections first.
+            var outcome = terminator.StopSubtree(stuck.Node, agent, "live session", $"auto: stuck process ({why})",
+                requireNoConnections: true, requireNoListeners: true,
+                stillWanted: () => !Paused && AutoRuleEngine.StillWanted(stuck, settings()));
+            Log.Info($"Auto-stop stuck result: {outcome.Message}");
+            AutoAction?.Invoke(new AutoActionEvent(outcome.Success,
+                outcome.Success ? $"Auto: stopped {stuck.Node.Process.Name} under {agent} ({why}); the agent sees it fail. {outcome.Message}" : $"Auto: {outcome.Message}",
+                outcome.Entry));
+            if (stuckToStop.Count > 1) RefreshNow();
+            return;
+        }
+
         var candidates = rules.LeftoversToStop(result, current, selfPid);
         Log.Debug($"Poll: {result.Snapshot.Processes.Count} processes, {result.Sessions.Count} sessions, {result.Orphans.Count} leftovers, {candidates.Count} auto-stop candidate(s).");
         if (candidates.Count > 0 && !Paused && settings().AutoStopLeftovers)
@@ -198,7 +235,8 @@ public sealed class MonitorService(
             var tree = candidates[0];
             rules.RecordStopAttempt(tree);
             Log.Info($"Auto-stop: {tree.Root.Process.Name} (pid {tree.Root.Process.Pid}), {tree.Root.TotalCount} process(es), owner {tree.FormerOwner}.");
-            var outcome = terminator.StopTree(tree, "auto: idle leftover", requireNoConnections: true);
+            var outcome = terminator.StopTree(tree, "auto: idle leftover", requireNoConnections: true,
+                stillWanted: () => !Paused && settings().AutoStopLeftovers);
             Log.Info($"Auto-stop result: {outcome.Message}");
             AutoAction?.Invoke(new AutoActionEvent(outcome.Success, $"Auto: {outcome.Message}", outcome.Entry));
             if (candidates.Count > 1 || !_freeRequested.IsEmpty) RefreshNow();

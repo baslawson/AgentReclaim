@@ -41,6 +41,14 @@ public static class Program
             return InstalledApp.RunUninstallCleanup(Environment.ProcessPath!);
         }
 
+        // `AgentReclaim.exe firewall apply <rules…> | remove-all | has-rules`: started elevated from the Firewall tab
+        // (or by the uninstaller). Only ever adds or removes block rules in AgentReclaim's own group.
+        if (args is ["firewall", .. var firewallArgs])
+        {
+            Log.Initialize();
+            return Core.Firewall.FirewallChange.RunHelper(firewallArgs);
+        }
+
         // `AgentReclaim.exe send-ctrl-c <pids> <approved pids>`: helper for graceful stops (see ConsoleSignal).
         if (args is ["send-ctrl-c", var candidates, var approved])
             return ConsoleSignal.RunHelper(candidates, approved);

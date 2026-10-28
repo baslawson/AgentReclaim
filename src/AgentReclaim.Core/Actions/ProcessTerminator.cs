@@ -19,12 +19,14 @@ public sealed record TerminationResult(bool Success, string Message, long FreedB
 public sealed class ProcessTerminator(
     ActionLog log,
     Func<IReadOnlyList<(ProcessKey Key, int ParentPid, string Name)>>? readIdentities = null,
-    Func<IReadOnlySet<int>, int?>? readConnections = null)
+    Func<IReadOnlySet<int>, int?>? readConnections = null,
+    Func<IReadOnlySet<int>, int?>? readListeners = null)
 {
     private readonly Func<IReadOnlyList<(ProcessKey Key, int ParentPid, string Name)>> _readIdentities =
         readIdentities ?? ProcessCollector.ReadIdentities;
 
     private readonly Func<IReadOnlySet<int>, int?> _readConnections = readConnections ?? TcpTable.EstablishedFor;
+    private readonly Func<IReadOnlySet<int>, int?> _readListeners = readListeners ?? TcpTable.ListenersFor;
 
     private const int ERROR_ACCESS_DENIED = 5;
 
@@ -35,15 +37,21 @@ public sealed class ProcessTerminator(
     /// Re-read the TCP tables right before stopping and refuse if any approved process has an established
     /// connection, or if the tables can't be read. Used by automatic stops.
     /// </param>
-    public TerminationResult StopTree(OrphanTree tree, string trigger, bool requireNoConnections = false) =>
-        StopSubtree(tree.Root, AgentSignatures.DisplayName(tree.Kind), tree.Attribution.ToString(), trigger, requireNoConnections);
+    public TerminationResult StopTree(OrphanTree tree, string trigger, bool requireNoConnections = false, Func<bool>? stillWanted = null) =>
+        StopSubtree(tree.Root, AgentSignatures.DisplayName(tree.Kind), tree.Attribution.ToString(), trigger, requireNoConnections,
+            stillWanted: stillWanted);
 
     /// <summary>
     /// Stops <paramref name="rootNode"/> and the descendants it had when it was checked, with the same
     /// re-checks as <see cref="StopTree"/>. <paramref name="agent"/> and <paramref name="attribution"/> only go in the log.
     /// </summary>
+    /// <param name="requireNoListeners">
+    /// Also refuse if any approved process listens on a TCP port or holds a UDP one (a server), or if those tables
+    /// can't be read. Used for stuck commands, which run under a live agent.
+    /// </param>
+    /// <param name="stillWanted">Asked last, just before anything irreversible; false refuses the stop.</param>
     public TerminationResult StopSubtree(ProcessNode rootNode, string agent, string attribution, string trigger,
-        bool requireNoConnections = false)
+        bool requireNoConnections = false, bool requireNoListeners = false, Func<bool>? stillWanted = null)
     {
         var root = rootNode.Process;
         var approved = rootNode.SelfAndDescendants().Select(x => x.Node.Process).ToList(); // root first
@@ -69,6 +77,15 @@ public sealed class ProcessTerminator(
                 return new TerminationResult(false, $"Not stopped: couldn't read network connections for {root.Name}.", 0);
             if (connections > 0)
                 return new TerminationResult(false, $"Not stopped: {root.Name} now has {connections} open connection(s).", 0);
+        }
+
+        if (requireNoListeners)
+        {
+            var listeners = _readListeners(approvedKeys.Select(k => k.Pid).ToHashSet());
+            if (listeners is null)
+                return new TerminationResult(false, $"Not stopped: couldn't read the ports {root.Name} uses.", 0);
+            if (listeners > 0)
+                return new TerminationResult(false, $"Not stopped: {root.Name} now listens on {listeners} port(s), so it may be a server.", 0);
         }
 
         var cwd = NativeProcess.GetCurrentDirectory(root.Pid);
@@ -100,6 +117,10 @@ public sealed class ProcessTerminator(
                     $"Not stopped: Windows won't let AgentReclaim stop {string.Join(", ", denied.Take(5))}. It probably runs as a service or as administrator.", 0);
             if (handles.Count == 0)
                 return new TerminationResult(false, $"{root.Name} (pid {root.Pid}) already exited.", 0);
+
+            // The rule that asked for this may have been turned off since (an automatic stop planned before the switch).
+            if (stillWanted?.Invoke() == false)
+                return new TerminationResult(false, $"Not stopped: {root.Name} (pid {root.Pid}), because the rule was turned off.", 0);
 
             // 3. Record the intent before doing anything irreversible.
             var intent = Entry("intent", true, "About to stop", 0);

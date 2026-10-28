@@ -44,10 +44,15 @@ public sealed class LineageStore
         Load();
     }
 
-    public LineageEntry? Get(ProcessKey key) => _entries.GetValueOrDefault(key);
+    /// <summary>
+    /// Only processes whose start time is known have a lineage: a PID alone is reused by Windows, so it can't say
+    /// "the same process" (entries without one, written by older versions, are ignored and dropped).
+    /// </summary>
+    public LineageEntry? Get(ProcessKey key) => key.StartTicks == 0 ? null : _entries.GetValueOrDefault(key);
 
     public void Record(ProcessKey key, LineageEntry entry)
     {
+        if (key.StartTicks == 0) return;
         if (_entries.TryGetValue(key, out var existing) && existing == entry) return;
         _entries[key] = entry;
         _dirty = true;
@@ -94,6 +99,11 @@ public sealed class LineageStore
             var rows = JsonSerializer.Deserialize<List<Row>>(File.ReadAllText(_path)) ?? [];
             foreach (var row in rows.Where(r => r is not null && r.OwnerName is not null))
             {
+                if (row.StartTicks == 0)
+                {
+                    _dirty = true; // written by an older version; rewritten without it
+                    continue;
+                }
                 var key = new ProcessKey(row.Pid, row.StartTicks);
                 var theirs = new LineageEntry(row.Kind, row.OwnerPid, row.OwnerName, row.Guessed, row.OwnerStartTicks, row.Agents);
                 if (!onlyMissing || !_entries.TryGetValue(key, out var mine) || (mine.Guessed && !theirs.Guessed))

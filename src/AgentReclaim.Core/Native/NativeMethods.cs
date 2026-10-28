@@ -97,6 +97,16 @@ internal static class NativeMethods
     [DllImport("iphlpapi.dll", SetLastError = true)]
     public static extern uint GetExtendedTcpTable(IntPtr table, ref int size, bool order, int af, int tableClass, uint reserved);
 
+    public const int UDP_TABLE_OWNER_PID = 1;
+
+    [DllImport("iphlpapi.dll", SetLastError = true)]
+    public static extern uint GetExtendedUdpTable(IntPtr table, ref int size, bool order, int af, int tableClass, uint reserved);
+
+    public const int SM_REMOTESESSION = 0x1000;
+
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int index);
+
     // --- Stopping processes ---
 
     public const uint PROCESS_TERMINATE = 0x0001;
