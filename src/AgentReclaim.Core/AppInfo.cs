@@ -17,7 +17,9 @@ public static class AppInfo
     /// True for the published single-file exe. Only that build can update itself; a dev build
     /// (exe + DLLs in bin\) only offers the release page.
     /// </summary>
+#pragma warning disable IL3000 // An empty Location is exactly the single-file signal we test for.
     public static bool IsSingleFileBuild => IsOwnBundledExe(Environment.ProcessPath, typeof(AppInfo).Assembly.Location);
+#pragma warning restore IL3000
 
     /// <summary>
     /// The running process is AgentReclaim's own single-file apphost: the exe is named AgentReclaim.exe

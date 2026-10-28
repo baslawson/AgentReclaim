@@ -104,7 +104,9 @@ public partial class MainWindow : Window
 
     // ---- Cleanup: WSL ----
 
-    private async void RefreshWsl()
+    private async void RefreshWsl() => await RefreshWslAsync();
+
+    private async Task RefreshWslAsync()
     {
         try
         {
@@ -124,7 +126,9 @@ public partial class MainWindow : Window
 
     private void WslRefresh_Click(object sender, RoutedEventArgs e) => RefreshWsl();
 
-    private async void WslShutdown_Click(object sender, RoutedEventArgs e)
+    private async void WslShutdown_Click(object sender, RoutedEventArgs e) => await ShutDownWslAsync();
+
+    private async Task ShutDownWslAsync()
     {
         var running = _cleanup.Wsl?.RunningDistros ?? [];
         var text = "This stops every WSL distro, including Docker Desktop's, and frees all of the VM's memory.\n" +
@@ -153,8 +157,8 @@ public partial class MainWindow : Window
 
     private void WslReclaim_Click(object sender, RoutedEventArgs e)
     {
-        var text = $"Adds this to {WslManager.ConfigPath} (a backup is kept):\n\n[experimental]\nautoMemoryReclaim=dropcache\n\n" +
-                   "WSL then hands memory it no longer needs back to Windows. \"dropcache\" is the mode known to work with Docker.\n" +
+        var text = $"Sets this in {WslManager.ConfigPath} (a backup is kept):\n\n[experimental]\nautoMemoryReclaim=dropCache\n\n" +
+                   "WSL then hands memory it no longer needs back to Windows. \"dropCache\" is WSL's default and the mode known to work with Docker.\n" +
                    "It takes effect the next time WSL starts.";
         if (MessageBox.Show(this, text, "Automatic WSL memory reclaim", MessageBoxButton.OKCancel, MessageBoxImage.Question)
             != MessageBoxResult.OK)
@@ -169,6 +173,36 @@ public partial class MainWindow : Window
             MessageBox.Show(this, ex.Message, "Couldn't update .wslconfig", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         RefreshWsl();
+    }
+
+    private async void WslReclaimOff_Click(object sender, RoutedEventArgs e)
+    {
+        var text = $"Sets autoMemoryReclaim=disabled in {WslManager.ConfigPath} (a backup is kept; anything else in the file stays).\n" +
+                   "Just removing the line isn't enough: WSL reclaims memory by default.\n\n" +
+                   "WSL then keeps memory it has used until it shuts down.\n" +
+                   "It takes effect the next time WSL starts.";
+        if (MessageBox.Show(this, text, "Turn off automatic WSL memory reclaim", MessageBoxButton.OKCancel, MessageBoxImage.Question)
+            != MessageBoxResult.OK)
+            return;
+
+        try
+        {
+            _viewModel.AddActivity(WslManager.DisableAutoMemoryReclaim()
+                ? $"Turned off WSL autoMemoryReclaim in {WslManager.ConfigPath}."
+                : "WSL autoMemoryReclaim was already off.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Couldn't update .wslconfig", MessageBoxButton.OK, MessageBoxImage.Error);
+            RefreshWsl();
+            return;
+        }
+        await RefreshWslAsync();
+
+        if (_cleanup.Wsl?.RunningDistros is { Count: > 0 }
+            && MessageBox.Show(this, "WSL is running, so it still uses automatic reclaim until it restarts. Shut it down now?",
+                "Turn off automatic WSL memory reclaim", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes)
+            await ShutDownWslAsync(); // asks again, listing what will be stopped
     }
 
     // ---- Cleanup: disk ----

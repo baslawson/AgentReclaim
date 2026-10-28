@@ -44,11 +44,17 @@ public static class ClaudeHookInstaller
         return Save(root);
     }
 
-    public static string Uninstall()
+    public static string Uninstall() => Uninstall(onlyForExe: null) ?? SettingsPath;
+
+    /// <summary>
+    /// Removes our hook. With <paramref name="onlyForExe"/>, only hooks that run that exact exe (used by the
+    /// uninstaller, so a portable copy's hook survives). Returns the settings path, or null if nothing changed.
+    /// </summary>
+    public static string? Uninstall(string? onlyForExe)
     {
         var root = Load();
-        if (root?["hooks"]?["SessionEnd"] is not JsonArray sessionEnd) return SettingsPath;
-        RemoveOurHooks(sessionEnd);
+        if (root?["hooks"]?["SessionEnd"] is not JsonArray sessionEnd) return null;
+        if (RemoveOurHooks(sessionEnd, onlyForExe) == 0) return null;
         if (sessionEnd.Count == 0) (root["hooks"] as JsonObject)?.Remove("SessionEnd");
         return Save(root);
     }
@@ -57,25 +63,43 @@ public static class ClaudeHookInstaller
     /// Removes only AgentReclaim's own command entries. Sibling hooks and group settings stay; a group is
     /// dropped only if our hook was all it contained.
     /// </summary>
-    private static void RemoveOurHooks(JsonArray sessionEnd)
+    private static int RemoveOurHooks(JsonArray sessionEnd, string? onlyForExe = null)
     {
+        var removed = 0;
         foreach (var group in sessionEnd.ToList())
         {
             if (group?["hooks"] is not JsonArray list) continue;
-            var ours = list.Where(IsOurHook).ToList();
+            var ours = list.Where(h => IsOurHook(h, onlyForExe)).ToList();
             if (ours.Count == 0) continue;
             foreach (var hook in ours) list.Remove(hook);
+            removed += ours.Count;
             if (list.Count == 0) sessionEnd.Remove(group);
         }
+        return removed;
     }
 
-    /// <summary>Exactly our command: an AgentReclaim executable invoked with `hook session-end`.</summary>
-    private static bool IsOurHook(JsonNode? hook)
+    /// <summary>Exactly our command: an AgentReclaim executable (optionally this one) invoked with `hook session-end`.</summary>
+    private static bool IsOurHook(JsonNode? hook) => IsOurHook(hook, null);
+
+    private static bool IsOurHook(JsonNode? hook, string? onlyForExe)
     {
         if (hook?["command"] is not JsonValue value || !value.TryGetValue<string>(out var command)) return false;
         var (file, arguments) = Actions.Relauncher.Split(command);
         return Path.GetFileName(file).Equals("AgentReclaim.exe", StringComparison.OrdinalIgnoreCase)
-               && arguments.Trim().Equals("hook session-end", StringComparison.OrdinalIgnoreCase);
+               && arguments.Trim().Equals("hook session-end", StringComparison.OrdinalIgnoreCase)
+               && (onlyForExe is null || SamePath(file, onlyForExe));
+    }
+
+    internal static bool SamePath(string a, string b)
+    {
+        try
+        {
+            return Path.GetFullPath(a).Equals(Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private static JsonObject? Load()

@@ -213,6 +213,7 @@ public static partial class UpdateInstaller
         try
         {
             File.WriteAllText(readyFile, AppInfo.Version.ToString());
+            if (Environment.ProcessPath is { } exe) Integration.InstalledApp.RecordVersion(exe, AppInfo.Version);
             if (File.Exists(FailedVersionFile) && LastFailedVersion() == AppInfo.Version) File.Delete(FailedVersionFile);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

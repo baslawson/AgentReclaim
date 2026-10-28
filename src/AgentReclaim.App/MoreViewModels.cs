@@ -37,6 +37,10 @@ public sealed class CleanupViewModel : ObservableObject
     public ObservableCollection<CleanupRow> Targets { get; } = [];
     public WslStatus? Wsl { get; private set; }
 
+    /// <summary>.wslconfig turns automatic memory reclaim on (shows "Turn off" instead of "Turn on").</summary>
+    public bool ReclaimOn { get; private set; }
+    public bool ReclaimOff => !ReclaimOn;
+
     public string WslSummary { get => _wslSummary; private set { _wslSummary = value; Raise(); } }
     public string ScanStatus { get => _scanStatus; set { _scanStatus = value; Raise(); } }
     public bool IsBusy { get => _isBusy; set { _isBusy = value; Raise(); Raise(nameof(IsIdle)); } }
@@ -48,8 +52,11 @@ public sealed class CleanupViewModel : ObservableObject
         WslSummary = !status.Installed
             ? "WSL isn't installed."
             : $"VM memory in use: {Format.Bytes(status.VmMemoryBytes)} · Running: {(status.RunningDistros.Count == 0 ? "nothing" : string.Join(", ", status.RunningDistros))}" +
-              $" · Automatic memory reclaim: {status.AutoMemoryReclaim ?? "off"}";
+              $" · Automatic memory reclaim: {status.AutoMemoryReclaim ?? $"{WslManager.DefaultAutoMemoryReclaim} (WSL default)"}";
+        ReclaimOn = WslManager.IsAutoMemoryReclaimOn(status.AutoMemoryReclaim);
         Raise(nameof(Wsl));
+        Raise(nameof(ReclaimOn));
+        Raise(nameof(ReclaimOff));
     }
 
     public void SetTargets(IReadOnlyList<CleanupTarget> targets)
@@ -120,6 +127,15 @@ public sealed class SettingsViewModel(AppSettings settings, Action<AppSettings> 
     {
         get => settings.LogLevel == Core.Diagnostics.LogLevel.Debug;
         set => Set(() => settings.LogLevel = value ? Core.Diagnostics.LogLevel.Debug : Core.Diagnostics.LogLevel.Info);
+    }
+
+    // ---- Appearance ----
+
+    /// <summary>0 = Auto (match Windows), 1 = Light, 2 = Dark.</summary>
+    public int ThemeIndex
+    {
+        get => (int)settings.Theme;
+        set => Set(() => settings.Theme = (ThemePreference)Math.Clamp(value, 0, 2));
     }
 
     // ---- Updates ----

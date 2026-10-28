@@ -33,6 +33,13 @@ public static class Program
             return UpdateInstaller.RunSupervisor(exe, int.Parse(pid), readyFile, version, TimeSpan.FromSeconds(90), int.Parse(previousPid));
         }
 
+        // `AgentReclaim.exe uninstall-cleanup`: run by the uninstaller (build/installer.iss).
+        if (args is ["uninstall-cleanup"])
+        {
+            Log.Initialize();
+            return InstalledApp.RunUninstallCleanup(Environment.ProcessPath!);
+        }
+
         // `AgentReclaim.exe send-ctrl-c <pids> <approved pids>`: helper for graceful stops (see ConsoleSignal).
         if (args is ["send-ctrl-c", var candidates, var approved])
             return ConsoleSignal.RunHelper(candidates, approved);

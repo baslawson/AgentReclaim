@@ -24,6 +24,9 @@ public sealed class AppSettings
     // Phase 5
     public bool StartWithWindows { get; set; }
 
+    // Appearance
+    public ThemePreference Theme { get; set; } = ThemePreference.System;
+
     // Diagnostics and updates
     public Diagnostics.LogLevel LogLevel { get; set; } = Diagnostics.LogLevel.Info;
     public Updates.UpdateMode UpdateMode { get; set; } = Updates.UpdateMode.Notify;
@@ -58,4 +61,12 @@ public sealed class AppSettings
     }
 
     public AppSettings Clone() => JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(this, JsonOptions), JsonOptions)!;
+}
+
+/// <summary>Window theme. System follows the Windows "app mode" setting, live.</summary>
+public enum ThemePreference
+{
+    System,
+    Light,
+    Dark,
 }

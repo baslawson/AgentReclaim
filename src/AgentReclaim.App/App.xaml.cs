@@ -33,11 +33,12 @@ public partial class App : Application
         Log.Initialize();
         Log.MinimumLevel = settings.LogLevel;
         HookUpCrashLogging();
+        ThemeManager.Apply(settings.Theme);
 
         // After an update, the new exe waits for the old one to exit before taking over.
         WaitForPreviousInstance(e.Args);
 
-        _singleInstance = new Mutex(true, @"Local\AgentReclaim.SingleInstance", out var isFirst);
+        _singleInstance = new Mutex(true, AppPaths.SingleInstanceMutexName, out var isFirst);
         if (!isFirst)
         {
             MessageBox.Show("AgentReclaim is already running. Look for it in the system tray.", "AgentReclaim");
@@ -169,6 +170,7 @@ public partial class App : Application
             _tray?.ShowMessage("Settings not saved", ex.Message, isError: true);
         }
         Log.MinimumLevel = settings.LogLevel;
+        if (settings.Theme != Volatile.Read(ref _published).Theme) ThemeManager.Apply(settings.Theme);
         Volatile.Write(ref _published, settings);
         _monitor?.RefreshNow();
     }

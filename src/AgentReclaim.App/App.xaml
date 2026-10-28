@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
+        <!-- Light-theme defaults; ThemeManager replaces these for dark mode. -->
         <SolidColorBrush x:Key="Accent" Color="#D9772B" />
         <SolidColorBrush x:Key="Muted" Color="#6B6B6B" />
         <SolidColorBrush x:Key="Card" Color="#F6F5F3" />
@@ -14,27 +15,15 @@
         </Style>
         <Style x:Key="StatLabel" TargetType="TextBlock">
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="{StaticResource Muted}" />
+            <Setter Property="Foreground" Value="{DynamicResource Muted}" />
         </Style>
         <Style x:Key="StatCard" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource Card}" />
-            <Setter Property="BorderBrush" Value="{StaticResource CardBorder}" />
+            <Setter Property="Background" Value="{DynamicResource Card}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="6" />
             <Setter Property="Padding" Value="14,10" />
             <Setter Property="Margin" Value="0,0,10,0" />
-        </Style>
-        <Style TargetType="DataGrid">
-            <Setter Property="AutoGenerateColumns" Value="False" />
-            <Setter Property="IsReadOnly" Value="True" />
-            <Setter Property="HeadersVisibility" Value="Column" />
-            <Setter Property="GridLinesVisibility" Value="Horizontal" />
-            <Setter Property="HorizontalGridLinesBrush" Value="{StaticResource CardBorder}" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Background" Value="White" />
-            <Setter Property="RowHeaderWidth" Value="0" />
-            <Setter Property="SelectionMode" Value="Single" />
-            <Setter Property="EnableRowVirtualization" Value="True" />
         </Style>
     </Application.Resources>
 </Application>

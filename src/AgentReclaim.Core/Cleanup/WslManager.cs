@@ -67,9 +67,9 @@ public static partial class WslManager
 
     /// <summary>
     /// Sets [experimental] autoMemoryReclaim in .wslconfig, keeping everything else and a timestamped backup.
-    /// "dropcache" is the choice that is known to coexist with Docker. Takes effect after WSL restarts.
+    /// "dropCache" (WSL's default) is the mode known to coexist with Docker. Takes effect after WSL restarts.
     /// </summary>
-    public static string EnableAutoMemoryReclaim(string value = "dropcache")
+    public static string EnableAutoMemoryReclaim(string value = DefaultAutoMemoryReclaim)
     {
         var lines = File.Exists(ConfigPath) ? File.ReadAllLines(ConfigPath).ToList() : [];
         FileBackup.Create(ConfigPath, "agentreclaim");
@@ -93,6 +93,30 @@ public static partial class WslManager
 
         File.WriteAllLines(ConfigPath, lines);
         return ConfigPath;
+    }
+
+    /// <summary>WSL's own default when .wslconfig doesn't set autoMemoryReclaim (and for unknown values).</summary>
+    public const string DefaultAutoMemoryReclaim = "dropCache";
+
+    /// <summary>
+    /// Whether WSL reclaims memory automatically. Only an explicit "disabled" turns it off: a missing key
+    /// or an unknown value means dropCache (see learn.microsoft.com/windows/wsl/wsl-config, [experimental]).
+    /// </summary>
+    public static bool IsAutoMemoryReclaimOn(string? configuredValue) =>
+        !string.Equals(configuredValue?.Trim(), "disabled", StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsAutoMemoryReclaimOn() => IsAutoMemoryReclaimOn(ReadAutoMemoryReclaim());
+
+    /// <summary>
+    /// Turns automatic reclaim off by writing autoMemoryReclaim=disabled (removing the key would fall back to
+    /// WSL's default, which is on). Keeps everything else and a timestamped backup. Returns false if it was
+    /// already off. Takes effect after WSL restarts.
+    /// </summary>
+    public static bool DisableAutoMemoryReclaim()
+    {
+        if (!IsAutoMemoryReclaimOn()) return false;
+        EnableAutoMemoryReclaim("disabled");
+        return true;
     }
 
     [GeneratedRegex(@"^([A-Za-z0-9_.]+)\s*=\s*(.*?)\s*(?:#.*)?$")]

@@ -20,4 +20,14 @@ public static class AutoStart
         if (enabled) key.SetValue(ValueName, $"\"{exePath}\" --tray");
         else key.DeleteValue(ValueName, throwOnMissingValue: false);
     }
+
+    /// <summary>Turns start-with-Windows off only if it starts <paramref name="exePath"/> (the uninstaller's copy).</summary>
+    public static bool DisableIfFor(string exePath)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
+        if (key?.GetValue(ValueName) is not string command) return false;
+        if (!ClaudeHookInstaller.SamePath(Actions.Relauncher.Split(command).File, exePath)) return false;
+        key.DeleteValue(ValueName, throwOnMissingValue: false);
+        return true;
+    }
 }

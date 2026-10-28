@@ -164,7 +164,7 @@ public class ConfigEditingTests : IDisposable
         var lines = File.ReadAllLines(WslManager.ConfigPath);
         Assert.Contains("memory=8GB", lines);
         Assert.Contains("sparseVhd=true", lines);
-        Assert.Equal("dropcache", WslManager.ReadAutoMemoryReclaim());
+        Assert.Equal("dropCache", WslManager.ReadAutoMemoryReclaim());
         Assert.Single(Directory.GetFiles(_dir, ".wslconfig.bak-*"));
     }
 
@@ -174,6 +174,76 @@ public class ConfigEditingTests : IDisposable
         File.WriteAllLines(WslManager.ConfigPath, ["[experimental]", "autoMemoryReclaim=gradual"]);
         WslManager.EnableAutoMemoryReclaim();
         Assert.Single(File.ReadAllLines(WslManager.ConfigPath), l => l.StartsWith("autoMemoryReclaim"));
+    }
+
+    [Fact]
+    public void Missing_or_unknown_reclaim_setting_counts_as_on_like_wsl()
+    {
+        Assert.True(WslManager.IsAutoMemoryReclaimOn()); // no .wslconfig: WSL's default is dropCache
+        Assert.True(WslManager.IsAutoMemoryReclaimOn("gradual"));
+        Assert.True(WslManager.IsAutoMemoryReclaimOn("typo")); // WSL treats unknown values as dropCache
+        Assert.False(WslManager.IsAutoMemoryReclaimOn("Disabled"));
+        Assert.False(WslManager.IsAutoMemoryReclaimOn(" disabled "));
+    }
+
+    [Fact]
+    public void Turning_reclaim_off_writes_disabled_and_keeps_everything_else()
+    {
+        File.WriteAllLines(WslManager.ConfigPath,
+            ["[wsl2]", "memory=8GB", "", "[experimental]", "autoMemoryReclaim=dropcache  # added by AgentReclaim", "sparseVhd=true"]);
+
+        Assert.True(WslManager.DisableAutoMemoryReclaim());
+
+        Assert.Equal(["[wsl2]", "memory=8GB", "", "[experimental]", "autoMemoryReclaim=disabled", "sparseVhd=true"],
+            File.ReadAllLines(WslManager.ConfigPath));
+        Assert.False(WslManager.IsAutoMemoryReclaimOn());
+        Assert.Single(Directory.GetFiles(_dir, ".wslconfig.bak-*"));
+    }
+
+    [Fact]
+    public void Turning_reclaim_off_without_a_config_creates_one()
+    {
+        // Deleting the line or the file would leave WSL's default (on); only an explicit value turns it off.
+        Assert.True(WslManager.DisableAutoMemoryReclaim());
+        Assert.Equal(["[experimental]", "autoMemoryReclaim=disabled"], File.ReadAllLines(WslManager.ConfigPath));
+
+        Assert.False(WslManager.DisableAutoMemoryReclaim()); // already off: nothing written
+        Assert.Empty(Directory.GetFiles(_dir, ".wslconfig.bak-*")); // there was no file to back up, and nothing was rewritten
+    }
+
+    [Fact]
+    public void Turning_reclaim_back_on_replaces_disabled()
+    {
+        File.WriteAllLines(WslManager.ConfigPath, ["[experimental]", "autoMemoryReclaim=disabled"]);
+        WslManager.EnableAutoMemoryReclaim();
+        Assert.Equal("dropCache", WslManager.ReadAutoMemoryReclaim());
+        Assert.True(WslManager.IsAutoMemoryReclaimOn());
+    }
+
+    [Fact]
+    public void Equivalent_data_directory_spellings_share_one_instance()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "AgentReclaim-review-data");
+        Assert.Equal(AppPaths.InstanceSuffixFor(dir), AppPaths.InstanceSuffixFor(dir + Path.DirectorySeparatorChar));
+        Assert.Equal(AppPaths.InstanceSuffixFor(dir), AppPaths.InstanceSuffixFor(dir.Replace('\\', '/') + "/"));
+        Assert.Equal(AppPaths.InstanceSuffixFor(dir), AppPaths.InstanceSuffixFor(dir.ToUpperInvariant()));
+        Assert.NotEqual(AppPaths.InstanceSuffixFor(dir), AppPaths.InstanceSuffixFor(dir + "-other"));
+    }
+
+    [Fact]
+    public void Uninstaller_removes_only_the_hook_of_its_own_copy()
+    {
+        var installed = Path.Combine(_dir, "Programs", "AgentReclaim", "AgentReclaim.exe");
+        var portable = Path.Combine(_dir, "portable", "AgentReclaim.exe");
+        ClaudeHookInstaller.Install(portable);
+
+        Assert.Null(ClaudeHookInstaller.Uninstall(onlyForExe: installed)); // not ours: untouched, no backup written
+        Assert.True(ClaudeHookInstaller.IsInstalled());
+        var backups = Directory.GetFiles(_dir, "settings.json.bak-*").Length;
+
+        Assert.NotNull(ClaudeHookInstaller.Uninstall(onlyForExe: portable));
+        Assert.False(ClaudeHookInstaller.IsInstalled());
+        Assert.Equal(backups + 1, Directory.GetFiles(_dir, "settings.json.bak-*").Length);
     }
 
     [Fact]
