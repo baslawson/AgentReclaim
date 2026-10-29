@@ -1,5 +1,5 @@
 ; Per-user installer for AgentReclaim (Inno Setup 6). Built by publish.ps1:
-;   ISCC /DAppVersion=0.5.0 /DSourceDir=<folder with AgentReclaim.exe and README.md> /O<output> installer.iss
+;   ISCC /DAppVersion=0.6.0 /DSourceDir=<folder with AgentReclaim.exe and README.md> /O<output> installer.iss
 ; Installs to %LOCALAPPDATA%\Programs\AgentReclaim without admin rights, so the app's own updater can
 ; replace its exe in place.
 
@@ -16,9 +16,9 @@ AppName=AgentReclaim
 AppVersion={#AppVersion}
 AppVerName=AgentReclaim {#AppVersion}
 AppPublisher=AgentReclaim
-AppPublisherURL=https://github.com/baslawson/AgentReclaim
-AppSupportURL=https://github.com/baslawson/AgentReclaim/issues
-AppUpdatesURL=https://github.com/baslawson/AgentReclaim/releases
+AppPublisherURL=https://github.com/baslawson/AgentReclaim-releases
+AppSupportURL=https://github.com/baslawson/AgentReclaim-releases/issues
+AppUpdatesURL=https://github.com/baslawson/AgentReclaim-releases/releases
 VersionInfoVersion={#AppVersion}
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\AgentReclaim

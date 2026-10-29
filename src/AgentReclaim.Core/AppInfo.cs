@@ -5,7 +5,8 @@ namespace AgentReclaim.Core;
 public static class AppInfo
 {
     public const string RepoOwner = "baslawson";
-    public const string RepoName = "AgentReclaim";
+    /// <summary>The public repo releases are published to (the source repo is private): updates are checked there.</summary>
+    public const string RepoName = "AgentReclaim-releases";
     public static string ReleasesUrl => $"https://github.com/{RepoOwner}/{RepoName}/releases";
 
     /// <summary>The app's version, from the entry assembly (the exe), e.g. 0.2.0.</summary>

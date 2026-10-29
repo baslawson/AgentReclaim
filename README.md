@@ -62,7 +62,7 @@ Closing the window keeps it in the tray; use the tray menu → Exit.
 
 ## Install
 
-Two downloads on each [release](https://github.com/baslawson/AgentReclaim/releases), both self-contained (no .NET needed):
+Two downloads on each [release](https://github.com/baslawson/AgentReclaim-releases/releases), both self-contained (no .NET needed):
 
 - **`AgentReclaim-<version>-win-x64-setup.exe`**: installs for your user only (no admin) to `%LOCALAPPDATA%\Programs\AgentReclaim`, with a Start menu entry, optional desktop shortcut and start-with-Windows, and an uninstaller in Settings → Apps. Uninstalling stops the app, removes start-with-Windows and the Claude Code hook only if they point at the installed copy, asks before removing AgentReclaim's firewall blocks (with an administrator prompt) and before deleting your settings and history. With the portable zip, remove the blocks in the app first (Firewall → Remove all AgentReclaim blocks), or in an administrator PowerShell: `Remove-NetFirewallRule -Group "AgentReclaim"`.
 - **`AgentReclaim-<version>-win-x64.zip`**: portable. Unzip anywhere and run.
@@ -75,6 +75,8 @@ Both update themselves the same way. Neither is code-signed yet, so SmartScreen 
 ./build/publish.ps1                          # tests, then the single-file exe, zip, setup exe and .sha256 files in dist/
 ./build/publish.ps1 -CertThumbprint <sha1>   # also signs the exe and setup (needs the Windows SDK's signtool)
 ```
+
+Releases are published to the public [AgentReclaim-releases](https://github.com/baslawson/AgentReclaim-releases) repo, which holds only the downloads: the app checks it for updates, so the source repo can stay private. Versions up to 0.5.0 check this source repo's releases instead, so 0.6.0 (the zip and its .sha256) is published here too, and the source repo stays public until those installs have updated to it.
 
 The setup exe needs Inno Setup 6 (`winget install JRSoftware.InnoSetup`); without it the script builds the zip only. The exe (~71 MB) needs no .NET install. Unsigned builds trigger a SmartScreen warning on other machines. Sign with your own code-signing certificate before distributing.
 
