@@ -72,7 +72,8 @@ public sealed class McpSelfScope(
 /// resources. Everything is read-only except stop_my_process, which is off until the user turns it on
 /// and then only reaches the calling agent's own processes and leftovers (see <see cref="AgentScope"/>).
 /// </summary>
-public sealed class McpServer(TextReader input, TextWriter output, Func<AnalysisResult>? analyze = null, McpSelfScope? scope = null)
+public sealed class McpServer(TextReader input, TextWriter output, Func<AnalysisResult>? analyze = null, McpSelfScope? scope = null,
+    Func<IReadOnlyList<DoctorReport>>? healthCheck = null)
 {
     private const string DefaultProtocolVersion = "2025-06-18";
 
@@ -169,6 +170,11 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
             "Only works if the user turned it on in AgentReclaim (Settings → Integrations). Never stops anything outside your own process tree, another agent, or protected processes. Logged in AgentReclaim's activity log.",
             new JsonObject { ["instance_id"] = new JsonObject { ["type"] = "string", ["description"] = "instance_id from list_my_processes (pid plus start time, so a reused pid never matches)" } },
             readOnly: false, required: ["instance_id"]),
+        Tool("check_agent_health",
+            "The last result of AgentReclaim's agent health checks (claude doctor, codex doctor, and for Gemini CLI its version, MCP servers and settings file): " +
+            "what isn't OK, with suggested fixes, and when it was checked. Covers installs, sign-in, config and MCP servers, not performance. " +
+            "This doesn't run the checks: the user runs them from AgentReclaim's Health tab or tray menu.",
+            new JsonObject()),
     ];
 
     private static JsonObject Tool(string name, string description, JsonObject properties, bool readOnly = true, string[]? required = null)
@@ -190,9 +196,11 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
     {
         var name = parameters?["name"]?.GetValue<string>();
         var args = parameters?["arguments"];
-        if (name is not ("resource_overview" or "list_session_processes" or "list_leftovers" or "list_my_processes" or "stop_my_process"))
+        if (name is not ("resource_overview" or "list_session_processes" or "list_leftovers" or "list_my_processes" or "stop_my_process"
+            or "check_agent_health"))
             throw new ArgumentException($"Unknown tool: {name}");
         if (name == "stop_my_process") return StopMyProcess(args);
+        if (name == "check_agent_health") return Content(JsonSerializer.Serialize(Health(), new JsonSerializerOptions { WriteIndented = true }));
 
         var result = Analyze();
         object payload = name switch
@@ -203,6 +211,25 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
             _ => MyProcesses(result),
         };
         return Content(JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>
+    /// The saved report, not a fresh run: this server is a separate process, and the tray app's scan only knows to
+    /// leave alone the CLIs it started itself.
+    /// </summary>
+    private object Health()
+    {
+        var reports = (healthCheck ?? (() => AgentDoctor.Load(AppPaths.HealthFile)))();
+        if (reports.Count == 0)
+            return new { error = "No health check has run yet. Ask the user to run one from AgentReclaim's Health tab or tray menu." };
+        return reports.Select(AgentDoctor.ForSaving).Select(r => new
+        {
+            agent = AgentSignatures.DisplayName(r.Agent),
+            status = r.Status.ToString(),
+            summary = r.Summary,
+            problems = r.Problems.Select(p => new { check = p.Name, status = p.Status.ToString(), fix = p.Fix }).ToList(),
+            checked_at_utc = r.RanAtUtc.ToString("u"),
+        }).ToList();
     }
 
     private static JsonObject Content(string text, bool isError = false)

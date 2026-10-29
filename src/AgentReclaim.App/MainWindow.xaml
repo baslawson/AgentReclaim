@@ -341,6 +341,55 @@
                 </Grid>
             </TabItem>
 
+            <!-- Health: the agents' own health checks -->
+            <TabItem Header="Health" x:Name="HealthTab">
+                <DockPanel Margin="4">
+                    <Border DockPanel.Dock="Top" Style="{StaticResource StatCard}" Margin="0,0,0,10">
+                        <StackPanel>
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="Run health checks" Padding="10,3" Click="RunHealthChecks_Click" IsEnabled="{Binding IsIdle}" />
+                                <TextBlock FontWeight="SemiBold" Text="Agent health checks" VerticalAlignment="Center" />
+                            </DockPanel>
+                            <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="0,2,0,6"
+                                       Text="Runs claude doctor, codex doctor, and for Gemini CLI (which has no doctor) its version, MCP servers and settings file. One at a time, at low priority, with no window. They check installs, sign-in, config and MCP servers, not what makes the PC slow: the other tabs show that. For a fuller Claude checkup that can also fix things, run /doctor in a Claude Code session." />
+                            <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Foreground="{DynamicResource Accent}" Text="{Binding Slowdown}"
+                                       Visibility="{Binding HasSlowdown, Converter={StaticResource BoolToVisibility}}" />
+                            <TextBlock Style="{StaticResource StatLabel}" Text="{Binding Status}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding Reports}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource StatCard}" Margin="0,0,0,8">
+                                        <StackPanel>
+                                            <DockPanel>
+                                                <TextBlock DockPanel.Dock="Right" FontWeight="SemiBold" Text="{Binding Status}" VerticalAlignment="Center" />
+                                                <TextBlock FontWeight="SemiBold" Text="{Binding Agent}" />
+                                            </DockPanel>
+                                            <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                            <ItemsControl ItemsSource="{Binding Problems}" Margin="12,4,0,0"
+                                                          Visibility="{Binding HasProblems, Converter={StaticResource BoolToVisibility}}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Margin="0,0,0,4">
+                                                            <TextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+                                                            <TextBlock Style="{StaticResource StatLabel}" Text="{Binding Fix}" TextWrapping="Wrap" Margin="14,0,0,0"
+                                                                       Visibility="{Binding HasFix, Converter={StaticResource BoolToVisibility}}" />
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <TextBlock Style="{StaticResource StatLabel}" Text="{Binding When}" Margin="0,4,0,0" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </TabItem>
+
             <!-- Cleanup: WSL memory and disk -->
             <TabItem Header="Cleanup" x:Name="CleanupTab">
                 <DockPanel Margin="4">
@@ -559,6 +608,19 @@
                         </StackPanel>
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,4,0,0"
                                    Text="One notification naming the biggest AI-related users (leftovers, the WSL/Docker VM, sessions, piles of idle children). Click it to open AgentReclaim. It doesn't stop anything, and won't repeat until memory has dropped back down (at most every 30 minutes)." />
+                        <CheckBox Content="Tell me when the CPU stays busy" IsChecked="{Binding CpuAlerts}" />
+                        <StackPanel Orientation="Horizontal" Margin="20,4,0,0">
+                            <TextBlock Text="When CPU use stays above" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding CpuAlertPercent, UpdateSourceTrigger=LostFocus}" />
+                            <TextBlock Text="% for" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding CpuAlertMinutes, UpdateSourceTrigger=LostFocus}" />
+                            <TextBlock Text="minutes" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,4,0,0"
+                                   Text="One notification naming the busiest agent sessions and leftovers. Long builds do this too. It doesn't stop anything, and won't repeat until the CPU has calmed down (at most every 30 minutes)." />
+                        <CheckBox Content="Run the agents' health checks when memory or CPU alerts" IsChecked="{Binding HealthChecksOnSlowdown}" />
+                        <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
+                                   Text="Runs claude doctor, codex doctor and the Gemini CLI checks in the background (at most every 30 minutes) and tells you what they found. They add some load of their own (codex doctor reads its databases for a few seconds), so this is off by default: the Health tab can run them at any time." />
                         <CheckBox Content="Tell me when an agent leaves something running" IsChecked="{Binding NotifyNewLeftovers}" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
                                    Text="For example &quot;Claude Code left node.exe running on port 5173 (shop)&quot;. Only processes that were seen under an agent, once they've outlived it for a few seconds. It doesn't stop anything." />

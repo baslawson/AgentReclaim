@@ -38,6 +38,7 @@ public sealed class MonitorService(
     private readonly ConcurrentDictionary<ProcessKey, byte> _freeRequested = new();
     private readonly ProjectResolver _projects = new();
     private readonly MemoryAlertRule _memoryAlert = new();
+    private readonly CpuAlertRule _cpuAlert = new();
     private readonly LeftoverWatch _leftoverWatch = new();
     private readonly StuckWatch _stuckWatch = new();
     private readonly SessionMemoryCaps _caps = new();
@@ -66,6 +67,9 @@ public sealed class MonitorService(
 
     /// <summary>Memory stayed above the alert threshold. Raised on the background thread, once per episode.</summary>
     public event Action<MemoryAlert>? MemoryLow;
+
+    /// <summary>CPU stayed above the alert threshold. Raised on the background thread, once per episode.</summary>
+    public event Action<CpuAlert>? CpuBusy;
 
     /// <summary>A leftover appeared (only when that notification is turned on). Raised on the background thread.</summary>
     public event Action<LeftoverNotice>? LeftoverAppeared;
@@ -186,6 +190,12 @@ public sealed class MonitorService(
         {
             Log.Info($"Low memory alert: {alert.Text}");
             MemoryLow?.Invoke(alert);
+        }
+
+        if (_cpuAlert.Evaluate(result, current, DateTime.UtcNow) is { } cpuAlert)
+        {
+            Log.Info($"CPU alert: {cpuAlert.Text}");
+            CpuBusy?.Invoke(cpuAlert);
         }
 
         foreach (var cap in _caps.Apply(result, () => (settings().CapSessionMemory, settings().SessionMemoryCapGb), selfPid))

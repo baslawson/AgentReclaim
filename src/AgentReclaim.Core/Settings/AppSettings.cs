@@ -28,6 +28,17 @@ public sealed class AppSettings
     public bool LowMemoryAlerts { get; set; } = true;
     public int LowMemoryAlertPercent { get; set; } = 90;
 
+    /// <summary>One notification when CPU stays above <see cref="CpuAlertPercent"/> for <see cref="CpuAlertMinutes"/> (a notice, not an action).</summary>
+    public bool CpuAlerts { get; set; }
+    public int CpuAlertPercent { get; set; } = 90;
+    public int CpuAlertMinutes { get; set; } = 3;
+
+    /// <summary>
+    /// Opt-in: when a memory or CPU alert fires, run the agents' health checks (claude doctor, codex doctor, Gemini
+    /// checks) in the background and report what they found. Otherwise they only run from the Health tab.
+    /// </summary>
+    public bool HealthChecksOnSlowdown { get; set; }
+
     /// <summary>
     /// The MCP server's stop_my_process tool: an agent may stop processes in its own tree (and its own
     /// leftovers), nothing else. Off until the user turns it on.

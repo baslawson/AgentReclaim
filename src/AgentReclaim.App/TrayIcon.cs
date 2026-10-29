@@ -17,9 +17,13 @@ internal sealed class TrayIcon : IDisposable
     private (int Bucket, bool Leftovers)? _shown;
     private readonly ToolStripMenuItem _freeSafe;
     private readonly ToolStripMenuItem _pause;
+    private readonly Action _open;
+    private Action? _onBalloonClick;
 
-    public TrayIcon(Action open, Action<bool> setPaused, Action freeSafeLeftovers, Action checkForUpdates, Action exit)
+    public TrayIcon(Action open, Action<bool> setPaused, Action freeSafeLeftovers, Action checkForUpdates, Action exit,
+        Action runHealthChecks)
     {
+        _open = open;
         var pause = _pause = new ToolStripMenuItem("Pause monitoring") { CheckOnClick = true };
         pause.CheckedChanged += (_, _) =>
         {
@@ -33,6 +37,7 @@ internal sealed class TrayIcon : IDisposable
         menu.Items.Add("Open AgentReclaim", null, (_, _) => open());
         menu.Items.Add(_freeSafe);
         menu.Items.Add(pause);
+        menu.Items.Add("Run agent health checks", null, (_, _) => runHealthChecks());
         menu.Items.Add("Open data folder", null, (_, _) => OpenDataFolder());
         menu.Items.Add("Check for updates", null, (_, _) => checkForUpdates());
         menu.Items.Add(new ToolStripSeparator());
@@ -46,7 +51,7 @@ internal sealed class TrayIcon : IDisposable
             Visible = true,
         };
         _icon.DoubleClick += (_, _) => open();
-        _icon.BalloonTipClicked += (_, _) => open();
+        _icon.BalloonTipClicked += (_, _) => (_onBalloonClick ?? _open)();
     }
 
     public void Update(AnalysisResult result, IReadOnlyList<OrphanTree> safeLeftovers)
@@ -71,9 +76,12 @@ internal sealed class TrayIcon : IDisposable
         _icon.Text = text.Length > 127 ? text[..127] : text;
     }
 
-    /// <summary>A Windows notification; clicking it opens the window.</summary>
-    public void ShowMessage(string title, string text, bool isError) =>
+    /// <summary>A Windows notification; clicking it opens the window (or does <paramref name="onClick"/>).</summary>
+    public void ShowMessage(string title, string text, bool isError, Action? onClick = null)
+    {
+        _onBalloonClick = onClick;
         _icon.ShowBalloonTip(4000, title, text.Length > 255 ? text[..254] + "…" : text, isError ? ToolTipIcon.Warning : ToolTipIcon.Info);
+    }
 
     private static void OpenDataFolder()
     {

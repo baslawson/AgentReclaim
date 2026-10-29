@@ -20,6 +20,8 @@ public partial class App : Application
     private UpdateService? _updates;
     private TrayIcon? _tray;
     private MainWindow? _window;
+    private HealthViewModel? _health;
+    private MainViewModel? _viewModel;
     private readonly CancellationTokenSource _pipeStop = new();
     private AppSettings _published = new();
     private MonitorUpdate? _latest;
@@ -77,8 +79,12 @@ public partial class App : Application
             () => Dispatcher.Invoke(() => _window?.IsVisible == true));
         settingsViewModel.Updates = _updates;
 
-        _window = new MainWindow(viewModel, settingsViewModel, new CleanupViewModel(), terminator, _monitor, log);
-        _tray = new TrayIcon(ShowWindow, paused => _monitor.Paused = paused, FreeSafeLeftovers, CheckForUpdatesFromTray, ExitApp);
+        _viewModel = viewModel;
+        _health = new HealthViewModel();
+        _window = new MainWindow(viewModel, settingsViewModel, new CleanupViewModel(), terminator, _monitor, log, _health);
+        _tray = new TrayIcon(ShowWindow, paused => _monitor.Paused = paused, FreeSafeLeftovers, CheckForUpdatesFromTray, ExitApp,
+            () => RunHealthChecks(fromTray: true));
+        _window.HealthChecksRequested += () => RunHealthChecks(fromTray: false);
 
         _window.ActionCompleted += result =>
             _tray.ShowMessage(result.Success ? "Freed resources" : "Couldn't stop process", result.Message, !result.Success);
@@ -89,11 +95,8 @@ public partial class App : Application
             viewModel.Update(update);
             _tray.Update(update.Result, update.SafeLeftovers);
         });
-        _monitor.MemoryLow += alert => Dispatcher.BeginInvoke(() =>
-        {
-            viewModel.AddActivity(alert.Text);
-            _tray.ShowMessage(alert.Title, alert.Text + " Click to open AgentReclaim.", isError: true);
-        });
+        _monitor.MemoryLow += alert => Dispatcher.BeginInvoke(() => Slowdown(alert.Title, alert.Text));
+        _monitor.CpuBusy += alert => Dispatcher.BeginInvoke(() => Slowdown(alert.Title, alert.Text));
         _monitor.LeftoverAppeared += notice => Dispatcher.BeginInvoke(() =>
         {
             viewModel.AddActivity(notice.Text);
@@ -202,6 +205,60 @@ public partial class App : Application
         if (MessageBox.Show(text, "Free safe leftovers", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
             return;
         _monitor.RequestFree(safe.Select(t => t.Root.Process.Key));
+    }
+
+    /// <summary>
+    /// A memory or CPU alert. With "run health checks on a slowdown" on, the agents' checks run in the background (at most
+    /// every 30 minutes) and report on their own; otherwise the Health tab offers to run them.
+    /// </summary>
+    private void Slowdown(string title, string text)
+    {
+        if (_viewModel is null || _tray is null || _health is null) return;
+        _viewModel.AddActivity(text);
+        _health.Slowdown = $"{DateTime.Now:t} {title}: {text}";
+        if (Volatile.Read(ref _published).HealthChecksOnSlowdown && _health.TryStartAutoRun(DateTime.UtcNow))
+        {
+            _tray.ShowMessage(title, text + " Checking the agents' health…", isError: true);
+            RunHealthChecks(fromTray: true);
+        }
+        else
+        {
+            _tray.ShowMessage(title, text + " Click to open AgentReclaim.", isError: true);
+        }
+    }
+
+    /// <summary>Runs the agents' health checks; a run from the tray or a slowdown reports in a notification.</summary>
+    private async void RunHealthChecks(bool fromTray)
+    {
+        // async void: anything escaping here would take the app down, so nothing may escape.
+        try
+        {
+            if (_health is null || _viewModel is null) return;
+            if (!_health.IsIdle)
+            {
+                if (fromTray) _tray?.ShowMessage("Agent health checks", "Already running.", isError: false);
+                return;
+            }
+            var reports = await _health.RunAsync();
+            if (reports is null || reports.Count == 0) return;
+
+            var line = AgentDoctor.OneLine(reports);
+            Log.Info($"Agent health checks: {line}");
+            _viewModel.AddActivity($"Agent health checks: {line}");
+            if (fromTray)
+                _tray?.ShowMessage("Agent health checks", line + " Click for details.",
+                    isError: reports.Any(r => r.Status is HealthStatus.Warning or HealthStatus.Failed), onClick: ShowHealth);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Agent health checks failed", ex);
+        }
+    }
+
+    private void ShowHealth()
+    {
+        ShowWindow();
+        _window?.ShowHealthTab();
     }
 
     private async void CheckForUpdatesFromTray()

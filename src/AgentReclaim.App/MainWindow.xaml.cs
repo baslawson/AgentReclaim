@@ -25,10 +25,11 @@ public partial class MainWindow : Window
     private readonly ActionLog _log;
     private readonly HistoryViewModel _history = new();
     private readonly FirewallViewModel _firewall = new();
+    private readonly HealthViewModel _health;
     private bool _firewallLoaded;
 
     public MainWindow(MainViewModel viewModel, SettingsViewModel settings, CleanupViewModel cleanup,
-        ProcessTerminator terminator, MonitorService monitor, ActionLog log)
+        ProcessTerminator terminator, MonitorService monitor, ActionLog log, HealthViewModel health)
     {
         Resources.Add("BoolToVisibility", new BooleanToVisibilityConverter());
         InitializeComponent();
@@ -37,6 +38,7 @@ public partial class MainWindow : Window
         CleanupTab.DataContext = _cleanup = cleanup;
         HistoryTab.DataContext = _history;
         FirewallTab.DataContext = _firewall;
+        HealthTab.DataContext = _health = health;
         _terminator = terminator;
         _monitor = monitor;
         _log = log;
@@ -46,6 +48,13 @@ public partial class MainWindow : Window
     }
 
     public event Action<TerminationResult>? ActionCompleted;
+
+    /// <summary>"Run health checks" on the Health tab (the app runs them and reports the result).</summary>
+    public event Action? HealthChecksRequested;
+
+    public void ShowHealthTab() => HealthTab.IsSelected = true;
+
+    private void RunHealthChecks_Click(object sender, RoutedEventArgs e) => HealthChecksRequested?.Invoke();
 
     // ---- Leftovers ----
 

@@ -21,8 +21,10 @@ Nothing is stopped, throttled or deleted unless you click a button or turn on an
 | **Auto rules** (opt-in) | Stop leftovers that were *seen* under an agent, have no open connections and have been idle N minutes. Throttle (lower priority + EcoQoS) build/test tools that hog the CPU under an agent. **Cap each agent session's memory** (off by default) puts what an agent starts into a Windows job object with a memory limit (8 GB by default); the agent itself is never capped, so reaching the limit fails a build or server with out-of-memory, not the session, and you're told when a session hits it. |
 | **Activity** | Every action (including stops an agent makes through MCP, as they happen), with **Relaunch** to start a stopped process again in its original folder. |
 | **Claude Code hook** (opt-in) | A `SessionEnd` hook that tells the app a session ended, so its leftovers only need a short grace period. |
-| **MCP server** | Read-only tools (`resource_overview`, `list_session_processes`, `list_leftovers`, `list_my_processes`) so an agent can ask what's using the machine. Opt-in `stop_my_process` (Settings → Integrations, **off by default**) lets the agent that started the server stop processes in its own tree and its own leftovers, nothing else (see Safety model). |
+| **MCP server** | Read-only tools (`resource_overview`, `list_session_processes`, `list_leftovers`, `list_my_processes`, `check_agent_health`) so an agent can ask what's using the machine. Opt-in `stop_my_process` (Settings → Integrations, **off by default**) lets the agent that started the server stop processes in its own tree and its own leftovers, nothing else (see Safety model). |
 | **Low-memory alert** | When memory stays above 90% (adjustable), one notification naming the biggest AI-related users: leftovers, the WSL/Docker VM, sessions, piles of idle children. Click it to open the app. It doesn't stop anything and won't repeat until memory drops back down (at most every 30 min). On by default; Settings → Notifications. |
+| **CPU alert** | When the CPU stays above 90% for 3 minutes (both adjustable), one notification naming the busiest agent sessions and leftovers. Same once-per-episode rules as the memory alert. Off by default. |
+| **Health** | Runs each installed agent CLI's own health check: `claude doctor`, `codex doctor --json`, and for Gemini CLI (which has no doctor) `gemini --version`, `gemini mcp list` and whether `~/.gemini/settings.json` reads. One at a time, at below-normal priority, no window, empty stdin, 60 s timeout each. Shows what isn't OK with the CLI's suggested fix; anything that looks like a key or token is hidden. The full text is only shown live: what's kept (`health.json`, the log, notifications) and what agents get over MCP has no text the CLIs printed, just each check's name (when it's a plain label), status and suggested fix. Run it from the Health tab or the tray menu; the MCP tool `check_agent_health` returns the last result (it doesn't start the CLIs itself). Opt-in (Settings → Notifications): run it automatically when a memory or CPU alert fires, at most every 30 min. Processes a check starts are never counted as agent sessions or leftovers. These check installs, sign-in, config and MCP servers, not performance. |
 | **Leftover notice** (opt-in) | "Claude Code left node.exe running on port 5173 (shop)": one notification when an agent leaves something running. Off by default; Settings → Notifications. |
 | **History** | AI-tool memory over the last 24 hours (one point a minute): all tools together and the four projects that used the most, with hover values and the same data as a table. Plus what was freed in the last day, split into you, automatic rules and agents (MCP). Kept in `history.json`. |
 | **Appearance** | Light, dark or Auto (follows Windows' app mode, live). Settings → Appearance. |
@@ -94,7 +96,7 @@ The setup exe needs Inno Setup 6 (`winget install JRSoftware.InnoSetup`); withou
 
 ## Data
 
-`%LOCALAPPDATA%\AgentReclaim`: `settings.json`, `lineage.json` (attribution memory), `actions.jsonl` (every action with command line and folder), `logs\`.
+`%LOCALAPPDATA%\AgentReclaim`: `settings.json`, `lineage.json` (attribution memory), `actions.jsonl` (every action with command line and folder), `health.json` (the last health check), `logs\`.
 
 For testing: `AGENTRECLAIM_DATA_DIR` moves the data folder (and gives that instance its own single-instance lock and pipe, so it can run next to your real copy), and `AGENTRECLAIM_UPDATE_API` points the update check at another URL.
 
@@ -111,7 +113,7 @@ For testing: `AGENTRECLAIM_DATA_DIR` moves the data folder (and gives that insta
 | `src/AgentReclaim.Core/Integration` | Hook, notification pipe, hook installer, MCP server and its self-stop scope, autostart, installer cleanup |
 | `src/AgentReclaim.Core/Updates`, `Diagnostics` | GitHub release check, verified self-update, debug log |
 | `src/AgentReclaim.App` | WPF window, tray icon, background monitor, entry point |
-| `tests/AgentReclaim.Core.Tests` | 308 tests: analyzer (Claude Code, Codex and Gemini CLI), stuck processes, safety, auto rules, leaks, config editing, MCP (including the self-stop scope), ports, projects, memory alert, leftover notice, Docker, memory caps, history, firewall rules and lock-out checks, logging, updates, Codex-review regressions, live-machine checks |
+| `tests/AgentReclaim.Core.Tests` | 328 tests: analyzer (Claude Code, Codex and Gemini CLI), agent health checks, CPU alert, stuck processes, safety, auto rules, leaks, config editing, MCP (including the self-stop scope), ports, projects, memory alert, leftover notice, Docker, memory caps, history, firewall rules and lock-out checks, logging, updates, Codex-review regressions, live-machine checks |
 | `build/publish.ps1`, `build/installer.iss` | Release build and per-user installer |
 | `build/make-icon.ps1` | Draws the app icon (`src/AgentReclaim.App/Assets`) |
 

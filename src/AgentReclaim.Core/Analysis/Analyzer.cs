@@ -50,6 +50,12 @@ public sealed record AnalyzerOptions
     /// by design, not tool calls.
     /// </summary>
     public TimeSpan AgentStartupGrace { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Processes started for an agent health check (`claude doctor` runs claude.exe): neither they nor anything under
+    /// them start an agent session.
+    /// </summary>
+    public Func<int, bool> IsHealthCheck { get; init; } = Integration.AgentDoctor.IsHealthCheckProcess;
 }
 
 /// <summary>
@@ -106,9 +112,18 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
             if (rootMemo.TryGetValue(p.Pid, out var memo)) return memo;
             rootMemo[p.Pid] = null; // cycle guard
             var parent = ParentOf(p);
-            var root = (parent is null ? null : SessionRootOf(parent)) ?? (AgentSignatures.AgentRootKind(p) is not null ? p : null);
+            var root = (parent is null ? null : SessionRootOf(parent))
+                       ?? (AgentSignatures.AgentRootKind(p) is not null && !UnderHealthCheck(p) ? p : null);
             rootMemo[p.Pid] = root;
             return root;
+        }
+
+        bool UnderHealthCheck(ProcessInfo p)
+        {
+            var seen = new HashSet<int>();
+            for (ProcessInfo? at = p; at is not null && seen.Add(at.Pid); at = ParentOf(at))
+                if (_options.IsHealthCheck(at.Pid)) return true;
+            return false;
         }
 
         // Record lineage for everything under a live agent before deciding what's orphaned.
