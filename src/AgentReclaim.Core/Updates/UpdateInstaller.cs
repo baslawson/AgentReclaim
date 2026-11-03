@@ -92,7 +92,7 @@ public static partial class UpdateInstaller
         if (!AppInfo.IsSingleFileBuild) throw new InvalidOperationException("Refusing to replace a host that isn't AgentReclaim's own exe.");
         var old = current + ".old";
 
-        if (File.Exists(old)) File.Delete(old);
+        ClearPreviousExe(old);
         File.Move(current, old);
         Process started;
         var readyFile = Path.Combine(AppPaths.DataDirectory, $"update-ready-{Guid.NewGuid():N}.flag");
@@ -135,6 +135,44 @@ public static partial class UpdateInstaller
         }
 
         Log.Info($"Update: installed {version} at {current}; handing over to pid {started.Id}.");
+    }
+
+    /// <summary>
+    /// Makes way for the next .old. A copy still running can't be deleted (an agent's `AgentReclaim.exe mcp` server, say,
+    /// lives as long as its session and may be from before the last update), but it can be renamed, and that mustn't
+    /// block an update. The new name is cleared up by <see cref="CleanUpAfterUpdate"/> once nothing is running from it.
+    /// </summary>
+    public static void ClearPreviousExe(string old)
+    {
+        if (!File.Exists(old)) return;
+        try
+        {
+            File.Delete(old);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            var aside = $"{old}-{Guid.NewGuid():N}";
+            File.Move(old, aside);
+            Log.Info($"Update: {old} is still in use, so it was moved to {aside}.");
+        }
+    }
+
+    /// <summary>Removes earlier versions next to <paramref name="exe"/>: its .old and any moved aside. One still in use stays for next time.</summary>
+    public static void DeletePreviousExes(string exe)
+    {
+        var dir = Path.GetDirectoryName(exe);
+        if (dir is null || !Directory.Exists(dir)) return;
+        foreach (var file in Directory.EnumerateFiles(dir, Path.GetFileName(exe) + ".old*"))
+        {
+            try
+            {
+                File.Delete(file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Debug($"Update cleanup deferred for {file}: {ex.Message}");
+            }
+        }
     }
 
     private static void Restore(string current, string old)
@@ -227,7 +265,7 @@ public static partial class UpdateInstaller
     {
         try
         {
-            if (Environment.ProcessPath is { } exe && File.Exists(exe + ".old")) File.Delete(exe + ".old");
+            if (Environment.ProcessPath is { } exe) DeletePreviousExes(exe);
             if (Directory.Exists(StagingRoot)) Directory.Delete(StagingRoot, recursive: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
