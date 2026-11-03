@@ -22,6 +22,7 @@ public static class AppPaths
     public static string ActionLogFile => Path.Combine(DataDirectory, "actions.jsonl");
     public static string SettingsFile => Path.Combine(DataDirectory, "settings.json");
     public static string HistoryFile => Path.Combine(DataDirectory, "history.json");
+    public static string ReclaimTallyFile => Path.Combine(DataDirectory, "reclaimed.json");
     public static string HealthFile => Path.Combine(DataDirectory, "health.json");
 
     /// <summary>

@@ -32,6 +32,8 @@ public partial class MainWindow : Window
         ProcessTerminator terminator, MonitorService monitor, ActionLog log, HealthViewModel health)
     {
         Resources.Add("BoolToVisibility", new BooleanToVisibilityConverter());
+        Resources.Add("NotToVisibility", new NotToVisibility());
+        Resources.Add("ZeroToVisibility", new ZeroToVisibility());
         InitializeComponent();
         DataContext = _viewModel = viewModel;
         SettingsTab.DataContext = _settings = settings;
@@ -45,9 +47,121 @@ public partial class MainWindow : Window
 
         _settings.RefreshHookStatus();
         Loaded += (_, _) => RefreshWsl();
+        _toastTimer.Tick += (_, _) => EndCelebration();
     }
 
     public event Action<TerminationResult>? ActionCompleted;
+
+    /// <summary>"Free safe…" on the leftovers card: the same confirmation and checks as the tray's.</summary>
+    public event Action? FreeSafeRequested;
+
+    private void FreeSafe_Click(object sender, RoutedEventArgs e) => FreeSafeRequested?.Invoke();
+
+    private void ReviewLeftovers_Click(object sender, RoutedEventArgs e) => Tabs.SelectedIndex = 0;
+
+    // ---- Celebration ----
+
+    private static readonly DependencyProperty ToastBytesProperty = DependencyProperty.Register("ToastBytes", typeof(double), typeof(MainWindow),
+        new PropertyMetadata(0.0, (d, e) => ((MainWindow)d).ToastAmount.Text = $"Freed {Format.Bytes((long)(double)e.NewValue)}"));
+    private readonly System.Windows.Threading.DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(4) };
+    private long _toastTotal;
+
+    /// <summary>Good news: a toast that counts up, a pleased mascot and a few sparkles. Plain text only with animation off.</summary>
+    public void Celebrate(long bytes)
+    {
+        if (!IsVisible)
+        {
+            _toastTotal = 0;
+            return;
+        }
+
+        // Several stops close together add up in the same toast.
+        var from = _toastTimer.IsEnabled ? _toastTotal : 0;
+        _toastTotal = from + bytes;
+        _viewModel.SetProud(true);
+        Toast.Visibility = Visibility.Visible;
+        ToastBytes(from, _toastTotal);
+        System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(ToastAmount)
+            ?.RaiseAutomationEvent(System.Windows.Automation.Peers.AutomationEvents.LiveRegionChanged);
+
+        if (Motion.Enabled)
+        {
+            Toast.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromMilliseconds(180)));
+            ToastMascot.Hop();
+            Sparkle();
+        }
+        else
+        {
+            Toast.Opacity = 1;
+        }
+
+        _toastTimer.Stop();
+        _toastTimer.Start();
+    }
+
+    private void ToastBytes(long from, long to)
+    {
+        if (!Motion.Enabled)
+        {
+            BeginAnimation(ToastBytesProperty, null);
+            SetValue(ToastBytesProperty, (double)to);
+            return;
+        }
+        BeginAnimation(ToastBytesProperty, new System.Windows.Media.Animation.DoubleAnimation(from, to, TimeSpan.FromMilliseconds(700))
+        {
+            EasingFunction = Motion.Ease,
+        });
+    }
+
+    private void EndCelebration()
+    {
+        _toastTimer.Stop();
+        _toastTotal = 0;
+        _viewModel.SetProud(false);
+        if (!Motion.Enabled)
+        {
+            Toast.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var fade = new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(300));
+        fade.Completed += (_, _) =>
+        {
+            if (!_toastTimer.IsEnabled) Toast.Visibility = Visibility.Collapsed;
+        };
+        Toast.BeginAnimation(OpacityProperty, fade);
+    }
+
+    /// <summary>A short burst of little stars from the toast; each is removed when its animation ends.</summary>
+    private void Sparkle()
+    {
+        var origin = Toast.TranslatePoint(new Point(Toast.ActualWidth / 2, Toast.ActualHeight / 2), Sparkles);
+        if (Toast.ActualWidth == 0) origin = new Point(Sparkles.ActualWidth / 2, Sparkles.ActualHeight - 70);
+        string[] colors = ["Accent", "Good", "Warn", "Series1"];
+        for (var i = 0; i < 16; i++)
+        {
+            var angle = -Math.PI * Random.Shared.NextDouble();
+            var reach = 70 + Random.Shared.NextDouble() * 110;
+            var move = new System.Windows.Media.TranslateTransform();
+            var star = new System.Windows.Shapes.Path
+            {
+                Data = System.Windows.Media.Geometry.Parse("M0,-6 L1.5,-1.5 6,0 1.5,1.5 0,6 -1.5,1.5 -6,0 -1.5,-1.5 Z"),
+                RenderTransform = move,
+            };
+            star.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, colors[i % colors.Length]);
+            System.Windows.Controls.Canvas.SetLeft(star, origin.X);
+            System.Windows.Controls.Canvas.SetTop(star, origin.Y);
+            Sparkles.Children.Add(star);
+
+            var time = TimeSpan.FromMilliseconds(650 + Random.Shared.Next(350));
+            move.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(0, Math.Cos(angle) * reach, time) { EasingFunction = Motion.Ease });
+            move.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(0, Math.Sin(angle) * reach, time) { EasingFunction = Motion.Ease });
+            var fade = new System.Windows.Media.Animation.DoubleAnimation(1, 0, time);
+            fade.Completed += (_, _) => Sparkles.Children.Remove(star);
+            star.BeginAnimation(OpacityProperty, fade);
+        }
+    }
 
     /// <summary>"Run health checks" on the Health tab (the app runs them and reports the result).</summary>
     public event Action? HealthChecksRequested;
@@ -428,6 +542,7 @@ public partial class MainWindow : Window
     private void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!ReferenceEquals(e.OriginalSource, Tabs)) return; // a grid or combo box inside a tab
+        FadeInContent();
         if (HistoryTab.IsSelected) RefreshHistory();
         if (FirewallTab.IsSelected && !_firewallLoaded && _firewall.IsIdle)
         {
@@ -439,6 +554,17 @@ public partial class MainWindow : Window
             _containersListed = true;
             _ = RefreshContainersAsync();
         }
+    }
+
+    /// <summary>The new tab settles in rather than snapping.</summary>
+    private void FadeInContent()
+    {
+        if (!Motion.Enabled || !IsVisible || Tabs.Template?.FindName("PART_SelectedContentHost", Tabs) is not FrameworkElement host) return;
+        host.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160)));
+        var move = new System.Windows.Media.TranslateTransform();
+        host.RenderTransform = move;
+        move.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(8, 0, TimeSpan.FromMilliseconds(200)) { EasingFunction = Motion.Ease });
     }
 
     /// <summary>Legend and table swatches take their series colour from the theme, so they follow a theme switch.</summary>

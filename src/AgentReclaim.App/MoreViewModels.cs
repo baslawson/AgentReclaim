@@ -256,6 +256,9 @@ public sealed class ProjectHistoryRow(string name, string path, string? brushKey
     public string Peak => Format.Bytes(peak);
 }
 
+/// <summary>One day's bar under "Freed". Height is 0–1 of the busiest day; the tooltip gives the day and amount.</summary>
+public sealed record FreedDayRow(double Height, string Tip, string Label, double BarHeight);
+
 /// <summary>The History tab: AI-tool memory over the last day, per project, and what was freed.</summary>
 public sealed class HistoryViewModel : ObservableObject
 {
@@ -265,11 +268,24 @@ public sealed class HistoryViewModel : ObservableObject
     private string _freedAllTime = "";
 
     public ObservableCollection<ProjectHistoryRow> Projects { get; } = [];
+    public IReadOnlyList<FreedDayRow> FreedDays { get; private set; } = [];
+    public string FreedTotal { get; private set; } = "";
     public IReadOnlyList<DateTime> Times { get; private set; } = [];
     public IReadOnlyList<ChartSeries> Series { get; private set; } = [];
     public IReadOnlyList<ProjectHistoryRow> OnChart { get; private set; } = [];
     public string FreedToday { get => _freedToday; private set { _freedToday = value; Raise(); } }
     public string FreedAllTime { get => _freedAllTime; private set { _freedAllTime = value; Raise(); } }
+
+    private static string Stops(int count) => $"{count} stop{(count == 1 ? "" : "s")}";
+
+    private static string FreedBy(FreedSummary day)
+    {
+        var parts = new List<string>();
+        if (day.ManualBytes > 0) parts.Add($"{Format.Bytes(day.ManualBytes)} by you");
+        if (day.AutoBytes > 0) parts.Add($"{Format.Bytes(day.AutoBytes)} by automatic rules");
+        if (day.AgentBytes > 0) parts.Add($"{Format.Bytes(day.AgentBytes)} by agents through MCP");
+        return parts.Count == 0 ? "no memory measured" : string.Join(", ", parts);
+    }
 
     public void Update(IReadOnlyList<HistorySample> samples, IReadOnlyList<ActionLogEntry> log, DateTime nowUtc)
     {
@@ -306,11 +322,22 @@ public sealed class HistoryViewModel : ObservableObject
             .OfType<ProjectHistoryRow>().ToList();
         Raise(nameof(OnChart));
 
+        var days = MemoryHistory.FreedByDay(log, DateOnly.FromDateTime(nowUtc.ToLocalTime()), 14);
+        var busiest = Math.Max(1, days.Max(d => d.Bytes));
+        const double tallest = 56;
+        FreedDays = days.Select((d, i) => new FreedDayRow(
+            d.Bytes / (double)busiest,
+            $"{d.Day:D}: {(d.Bytes == 0 ? "nothing freed" : $"{Format.Bytes(d.Bytes)} freed")}",
+            i % 13 == 0 ? (i == 13 ? "Today" : d.Day.ToString("MMM d", System.Globalization.CultureInfo.CurrentCulture)) : "",
+            d.Bytes == 0 ? 2 : Math.Max(4, d.Bytes / (double)busiest * tallest))).ToList();
+        Raise(nameof(FreedDays));
+        FreedTotal = day.Stops == 0 ? "All quiet today" : $"{Format.Bytes(day.Bytes)} freed today";
+        Raise(nameof(FreedTotal));
+
         FreedToday = day.Stops == 0
             ? "Nothing freed in the last 24 hours."
-            : $"Freed {Format.Bytes(day.Bytes)} in the last 24 hours ({day.Stops} stop(s)): " +
-              $"{Format.Bytes(day.ManualBytes)} by you, {Format.Bytes(day.AutoBytes)} by automatic rules, {Format.Bytes(day.AgentBytes)} by agents through MCP.";
-        FreedAllTime = all.Stops == 0 ? "" : $"In the recent action log: {Format.Bytes(all.Bytes)} over {all.Stops} stop(s).";
+            : $"In the last 24 hours, {Stops(day.Stops)}: {FreedBy(day)}.";
+        FreedAllTime = all.Stops == 0 ? "" : $"In the recent action log: {Format.Bytes(all.Bytes)} over {Stops(all.Stops)}.";
         Raise(nameof(Times));
         Raise(nameof(Series));
     }

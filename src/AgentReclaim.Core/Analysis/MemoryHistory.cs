@@ -81,6 +81,9 @@ public sealed class MemoryHistory(string? path = null)
         }
     }
 
+    /// <summary>A stop that really freed something: a finished, successful stop of a process tree or container.</summary>
+    public static bool IsFreed(ActionLogEntry e) => e is { Phase: "done", Success: true, Action: "stop-tree" or "docker-stop" };
+
     /// <summary>Successful stops since <paramref name="sinceUtc"/>, by trigger: "mcp:" is an agent, "auto:" a rule, anything else a person.</summary>
     public static FreedSummary Freed(IEnumerable<ActionLogEntry> entries, DateTime sinceUtc)
     {
@@ -88,8 +91,7 @@ public sealed class MemoryHistory(string? path = null)
         var stops = 0;
         foreach (var e in entries)
         {
-            if (e.Phase != "done" || !e.Success || e.TimeUtc < sinceUtc) continue;
-            if (e.Action is not ("stop-tree" or "docker-stop")) continue;
+            if (!IsFreed(e) || e.TimeUtc < sinceUtc) continue;
             stops++;
             var bytes = Math.Max(0, e.FreedBytes);
             if (e.Trigger?.StartsWith("mcp:", StringComparison.Ordinal) == true) agent += bytes;
@@ -97,6 +99,20 @@ public sealed class MemoryHistory(string? path = null)
             else manual += bytes;
         }
         return new FreedSummary(manual + auto + agent, stops, manual, auto, agent);
+    }
+
+    /// <summary>Bytes freed on each of the last <paramref name="days"/> local days, oldest first, ending today.</summary>
+    public static IReadOnlyList<(DateOnly Day, long Bytes)> FreedByDay(IEnumerable<ActionLogEntry> entries, DateOnly today, int days)
+    {
+        var totals = new Dictionary<DateOnly, long>();
+        foreach (var e in entries)
+        {
+            if (!IsFreed(e)) continue;
+            var day = DateOnly.FromDateTime(e.TimeUtc.ToLocalTime());
+            totals[day] = totals.GetValueOrDefault(day) + Math.Max(0, e.FreedBytes);
+        }
+        return Enumerable.Range(0, days).Select(i => today.AddDays(i - days + 1))
+            .Select(d => (d, totals.GetValueOrDefault(d))).ToList();
     }
 
     private static List<HistorySample> Load(string? path)

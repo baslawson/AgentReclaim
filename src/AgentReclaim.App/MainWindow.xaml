@@ -2,90 +2,177 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:AgentReclaim.App"
-        Title="AgentReclaim" Width="1150" Height="720" MinWidth="760" MinHeight="480"
-        FontFamily="Segoe UI" FontSize="13"
+        Title="AgentReclaim" Width="1240" Height="760" MinWidth="1060" MinHeight="600"
+        FontFamily="Segoe UI" FontSize="13" Typography.NumeralAlignment="Tabular"
+        Background="{DynamicResource AppBackground}"
         WindowStartupLocation="CenterScreen" Icon="pack://application:,,,/AgentReclaim;component/Assets/AgentReclaim.ico">
-    <DockPanel Margin="16">
-        <!-- Stat tiles -->
-        <UniformGrid DockPanel.Dock="Top" Rows="1" Margin="0,0,-10,14">
-            <Border Style="{StaticResource StatCard}">
-                <StackPanel>
-                    <TextBlock Style="{StaticResource StatLabel}" Text="System memory" />
-                    <TextBlock Style="{StaticResource StatValue}" Text="{Binding SystemMemory}" />
-                </StackPanel>
-            </Border>
-            <Border Style="{StaticResource StatCard}">
-                <StackPanel>
-                    <TextBlock Style="{StaticResource StatLabel}" Text="System CPU" />
-                    <TextBlock Style="{StaticResource StatValue}" Text="{Binding SystemCpu}" />
-                </StackPanel>
-            </Border>
-            <Border Style="{StaticResource StatCard}">
-                <StackPanel>
-                    <TextBlock Style="{StaticResource StatLabel}" Text="AI coding tools" />
-                    <TextBlock Style="{StaticResource StatValue}" Text="{Binding AgentMemory}" />
-                    <TextBlock Style="{StaticResource StatLabel}" Text="{Binding AgentMemoryDetail}" />
-                </StackPanel>
-            </Border>
-            <Border Style="{StaticResource StatCard}">
-                <StackPanel>
-                    <TextBlock Style="{StaticResource StatLabel}" Text="Leftovers you can free" />
-                    <TextBlock Style="{StaticResource StatValue}" Foreground="{DynamicResource Accent}" Text="{Binding Leftovers}" />
-                    <TextBlock Style="{StaticResource StatLabel}" Text="{Binding LeftoversDetail}" />
-                </StackPanel>
-            </Border>
-        </UniformGrid>
-
-        <TextBlock DockPanel.Dock="Bottom" Margin="0,8,0,0" Style="{StaticResource StatLabel}" Text="{Binding Status}" />
-
-        <TabControl x:Name="Tabs" SelectionChanged="Tabs_SelectionChanged">
-            <!-- Tabs left to right in a plain panel: the stock one stretches them and, once they wrap,
-                 moves the selected row to the bottom, so the tabs jump around when clicked. -->
-            <TabControl.Template>
+    <Grid>
+        <local:NavTabControl x:Name="Tabs" TabStripPlacement="Left" Foreground="{DynamicResource TextFillColorPrimaryBrush}" SelectionChanged="Tabs_SelectionChanged">
+            <local:NavTabControl.Template>
                 <ControlTemplate TargetType="TabControl">
-                    <DockPanel>
-                        <WrapPanel DockPanel.Dock="Top" IsItemsHost="True" Margin="0,0,0,2" />
-                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
-                            <!-- The name matters: screen readers and UI Automation reach the tab content through it. -->
-                            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" Margin="{TemplateBinding Padding}" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="212" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Sidebar: the mascot's corner, then the tabs in groups, then what's been reclaimed. -->
+                        <Border Background="{DynamicResource Sidebar}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,0,1,0">
+                            <DockPanel>
+                                <DockPanel x:Name="PartGreeting" DockPanel.Dock="Top" Margin="14,12,12,8">
+                                    <local:Mascot DockPanel.Dock="Left" Width="46" Height="46" Margin="0,0,10,0" Mood="{Binding Mood}" />
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock FontWeight="SemiBold" FontSize="14" Text="{Binding Greeting}" />
+                                        <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Text="{Binding MoodLine}" />
+                                    </StackPanel>
+                                </DockPanel>
+
+                                <Border x:Name="PartReclaimed" DockPanel.Dock="Bottom" Style="{StaticResource StatCard}" Margin="12,8,12,12" Padding="12,9"
+                                        ToolTip="Memory freed by stopping leftovers, by you, automatic rules and agents, since this count began.">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource StatLabel}" Text="Reclaimed so far" />
+                                        <TextBlock FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" Text="{Binding ReclaimedTotal}" />
+                                        <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Text="{Binding ReclaimedDetail}" />
+                                        <TextBlock Style="{StaticResource StatLabel}" Margin="0,3,0,0" Text="{Binding CleanDaysText}"
+                                                   Visibility="{Binding HasCleanDays, Converter={StaticResource BoolToVisibility}}" />
+                                    </StackPanel>
+                                </Border>
+
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                                    <StackPanel IsItemsHost="True" Margin="0,0,0,4" KeyboardNavigation.DirectionalNavigation="Contained" />
+                                </ScrollViewer>
+                            </DockPanel>
                         </Border>
-                    </DockPanel>
+
+                        <DockPanel Grid.Column="1" Margin="16,14,16,10">
+                            <!-- Stat cards -->
+                            <UniformGrid x:Name="PartCards" DockPanel.Dock="Top" Rows="1" Margin="0,0,-10,12">
+                                <Border Style="{StaticResource StatCard}">
+                                    <DockPanel>
+                                        <Grid DockPanel.Dock="Left" Width="54" Height="54" Margin="0,0,10,0" VerticalAlignment="Center">
+                                            <local:RingGauge Value="{Binding MemoryFraction}" State="{Binding MemoryState}" />
+                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="SemiBold" FontSize="13" Text="{Binding MemoryPercent}" />
+                                        </Grid>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Style="{StaticResource StatLabel}" Text="System memory" />
+                                            <TextBlock FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" Text="{Binding SystemMemory}" />
+                                            <TextBlock Style="{StaticResource StatLabel}" Text="{Binding MemoryWord}" />
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Border>
+                                <Border Style="{StaticResource StatCard}">
+                                    <DockPanel>
+                                        <StackPanel DockPanel.Dock="Top">
+                                            <TextBlock Style="{StaticResource StatLabel}" Text="System CPU" />
+                                            <TextBlock Style="{StaticResource StatValue}" Text="{Binding SystemCpu}" />
+                                        </StackPanel>
+                                        <local:Sparkline Height="26" Margin="0,4,0,0" Maximum="100" Values="{Binding CpuPoints}" ToolTip="{Binding CpuRange}"
+                                                         AutomationProperties.Name="{Binding CpuRange}" />
+                                    </DockPanel>
+                                </Border>
+                                <Border Style="{StaticResource StatCard}">
+                                    <DockPanel>
+                                        <TextBlock DockPanel.Dock="Top" Style="{StaticResource StatLabel}" Text="AI coding tools" />
+                                        <DockPanel DockPanel.Dock="Top">
+                                            <TextBlock DockPanel.Dock="Right" Style="{StaticResource StatLabel}" VerticalAlignment="Center" Margin="6,0,0,0" Text="{Binding AgentMemoryDetail}" />
+                                            <TextBlock Style="{StaticResource StatValue}" Text="{Binding AgentMemory}" />
+                                        </DockPanel>
+                                        <local:Sparkline Height="26" Margin="0,4,0,0" Values="{Binding AgentPoints}" ToolTip="{Binding AgentRange}"
+                                                         AutomationProperties.Name="{Binding AgentRange}" />
+                                    </DockPanel>
+                                </Border>
+                                <Border Style="{StaticResource StatCard}">
+                                    <DockPanel>
+                                        <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center">
+                                            <Button Style="{StaticResource PrimaryButton}" Content="Free safe…" Click="FreeSafe_Click"
+                                                    ToolTip="Stops leftovers that pass every safety check, after asking you first."
+                                                    Visibility="{Binding HasSafeLeftovers, Converter={StaticResource BoolToVisibility}}" />
+                                            <Button Content="Review" Padding="10,3" Click="ReviewLeftovers_Click"
+                                                    Visibility="{Binding HasOnlyUnsafeLeftovers, Converter={StaticResource BoolToVisibility}}" />
+                                        </StackPanel>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Style="{StaticResource StatLabel}" Text="Leftovers to free" />
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Style="{StaticResource StatValue}" Foreground="{DynamicResource Good}" Text="✓ "
+                                                           Visibility="{Binding IsAllClear, Converter={StaticResource BoolToVisibility}}" />
+                                                <TextBlock Style="{StaticResource StatValue}" Foreground="{DynamicResource Good}" Text="{Binding Leftovers}"
+                                                           Visibility="{Binding IsAllClear, Converter={StaticResource BoolToVisibility}}" />
+                                                <TextBlock Style="{StaticResource StatValue}" Foreground="{DynamicResource Accent}" Text="{Binding Leftovers}"
+                                                           Visibility="{Binding IsAllClear, Converter={StaticResource NotToVisibility}}" />
+                                            </StackPanel>
+                                            <TextBlock Style="{StaticResource StatLabel}" Text="{Binding LeftoversDetail}" />
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Border>
+                            </UniformGrid>
+
+                            <StackPanel x:Name="PartStatus" DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+                                <local:HeartbeatDot Beat="{Binding Beat}" VerticalAlignment="Center" Margin="0,0,7,0" />
+                                <TextBlock Style="{StaticResource StatLabel}" Text="{Binding Status}" />
+                            </StackPanel>
+
+                            <!-- The name matters: screen readers and UI Automation reach the tab content through it. -->
+                            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" />
+                        </DockPanel>
+                    </Grid>
                 </ControlTemplate>
-            </TabControl.Template>
-            <TabControl.Resources>
-                <!-- Fluent's tab headers have a large fixed width; these size to their text. -->
+            </local:NavTabControl.Template>
+            <local:NavTabControl.Resources>
                 <Style TargetType="TabItem">
                     <!-- Not based on Fluent's style, so the theme's text colour has to be set here (the tab content inherits it too). -->
                     <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
                     <Setter Property="Template">
                         <Setter.Value>
                             <ControlTemplate TargetType="TabItem">
-                                <Border x:Name="Chrome" Padding="14,7,14,5" Margin="0,0,2,0" CornerRadius="6,6,0,0" Background="Transparent">
-                                    <StackPanel>
-                                        <ContentPresenter ContentSource="Header" />
-                                        <Border x:Name="Underline" Height="2" Margin="0,5,0,0" CornerRadius="1"
-                                                Background="{DynamicResource Accent}" Visibility="Hidden" />
-                                    </StackPanel>
-                                </Border>
+                                <StackPanel>
+                                    <TextBlock x:Name="Heading" Margin="20,10,0,3" FontSize="11" FontWeight="SemiBold" IsHitTestVisible="False"
+                                               Foreground="{DynamicResource Muted}" Text="{Binding (local:Nav.Group), RelativeSource={RelativeSource TemplatedParent}}" />
+                                    <Grid Margin="8,1">
+                                        <Border x:Name="Chrome" Padding="10,6" CornerRadius="7" Background="Transparent">
+                                            <DockPanel>
+                                                <Border x:Name="Pill" DockPanel.Dock="Right" CornerRadius="8" Padding="6,0,6,1" MinWidth="18" Background="{DynamicResource CardBorder}" VerticalAlignment="Center">
+                                                    <TextBlock x:Name="PillText" FontSize="11" HorizontalAlignment="Center"
+                                                               Text="{Binding (local:Nav.Badge), RelativeSource={RelativeSource TemplatedParent}}" />
+                                                </Border>
+                                                <TextBlock x:Name="Icon" DockPanel.Dock="Left" Width="18" Margin="0,0,10,0" FontSize="15" VerticalAlignment="Center" TextAlignment="Center"
+                                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Foreground="{DynamicResource Muted}"
+                                                           Text="{Binding (local:Nav.Icon), RelativeSource={RelativeSource TemplatedParent}}" />
+                                                <ContentPresenter ContentSource="Header" VerticalAlignment="Center" />
+                                            </DockPanel>
+                                        </Border>
+                                        <Border x:Name="Marker" Width="3" Margin="0,8" CornerRadius="1.5" HorizontalAlignment="Left" Background="{DynamicResource Accent}" Visibility="Collapsed" />
+                                    </Grid>
+                                </StackPanel>
                                 <ControlTemplate.Triggers>
+                                    <Trigger Property="local:Nav.Group" Value="">
+                                        <Setter TargetName="Heading" Property="Visibility" Value="Collapsed" />
+                                    </Trigger>
+                                    <Trigger Property="local:Nav.Badge" Value="0">
+                                        <Setter TargetName="Pill" Property="Visibility" Value="Collapsed" />
+                                    </Trigger>
+                                    <Trigger Property="local:Nav.Urgent" Value="True">
+                                        <Setter TargetName="Pill" Property="Background" Value="{DynamicResource Accent}" />
+                                        <Setter TargetName="PillText" Property="Foreground" Value="{DynamicResource OnAccent}" />
+                                    </Trigger>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Card}" />
+                                        <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource HoverFill}" />
                                     </Trigger>
                                     <Trigger Property="IsSelected" Value="True">
-                                        <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Card}" />
-                                        <Setter TargetName="Underline" Property="Visibility" Value="Visible" />
+                                        <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SelectionFill}" />
+                                        <Setter TargetName="Marker" Property="Visibility" Value="Visible" />
+                                        <Setter TargetName="Icon" Property="Foreground" Value="{DynamicResource Accent}" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
                         </Setter.Value>
                     </Setter>
                 </Style>
-            </TabControl.Resources>
+            </local:NavTabControl.Resources>
             <!-- Leftovers -->
-            <TabItem Header="{Binding OrphansHeader}">
+            <TabItem Header="Leftovers" local:Nav.Icon="&#xEA99;" local:Nav.Group="Now" local:Nav.Badge="{Binding Orphans.Count}" local:Nav.Urgent="True" AutomationProperties.Name="{Binding OrphansHeader}">
                 <Grid>
-                    <DataGrid ItemsSource="{Binding Orphans}" Style="{DynamicResource Grid}">
+                    <DataGrid ItemsSource="{Binding Orphans}" Style="{DynamicResource Grid}"
+                              Visibility="{Binding HasNoOrphans, Converter={StaticResource NotToVisibility}}">
                         <DataGrid.Columns>
                             <DataGridTemplateColumn Header="" Width="Auto">
                                 <DataGridTemplateColumn.CellTemplate>
@@ -94,12 +181,12 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Agent" Binding="{Binding Agent}" />
+                            <DataGridTemplateColumn Header="Agent" CellTemplate="{StaticResource AgentCell}" SortMemberPath="Agent" />
                             <DataGridTextColumn Header="Process" Binding="{Binding Name}" />
                             <DataGridTextColumn Header="PID" Binding="{Binding Pid}" />
                             <DataGridTextColumn Header="Procs" Binding="{Binding Processes}" />
-                            <DataGridTextColumn Header="Memory" Binding="{Binding Memory}" SortMemberPath="MemoryBytes" />
-                            <DataGridTextColumn Header="CPU" Binding="{Binding Cpu}" />
+                            <DataGridTemplateColumn Header="Memory" CellTemplate="{StaticResource MemoryCell}" SortMemberPath="MemoryBytes" />
+                            <DataGridTemplateColumn Header="CPU" CellTemplate="{StaticResource CpuCell}" SortMemberPath="CpuValue" />
                             <DataGridTextColumn Header="Idle" Binding="{Binding Idle}" />
                             <DataGridTextColumn Header="Ports" Binding="{Binding Ports}" />
                             <DataGridTextColumn Header="Was started by" Binding="{Binding Owner}" />
@@ -107,53 +194,58 @@
                             <DataGridTextColumn Header="Command line" Binding="{Binding CommandLine}" Width="*" />
                         </DataGrid.Columns>
                     </DataGrid>
-                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
-                               Foreground="{DynamicResource Muted}" TextWrapping="Wrap" MaxWidth="460"
-                               Text="Nothing left behind. Processes that Claude Code, Codex or Gemini CLI started and then abandoned will show up here."
-                               Visibility="{Binding HasNoOrphans, Converter={StaticResource BoolToVisibility}}" />
+                    <local:EmptyState Title="Spotless." Text="Nothing left behind. Processes that Claude Code, Codex or Gemini CLI started and then abandoned will show up here."
+                                      Visibility="{Binding HasNoOrphans, Converter={StaticResource BoolToVisibility}}" />
                 </Grid>
             </TabItem>
 
             <!-- Live sessions: master/detail -->
-            <TabItem Header="{Binding SessionsHeader}">
+            <TabItem Header="Sessions" local:Nav.Icon="&#xE756;" local:Nav.Badge="{Binding Sessions.Count}" AutomationProperties.Name="{Binding SessionsHeader}">
                 <Grid>
+                    <local:EmptyState Title="All quiet." Text="No Claude Code, Codex or Gemini CLI running right now. Each session shows up here with what it started."
+                                      Visibility="{Binding HasNoSessions, Converter={StaticResource BoolToVisibility}}" />
+                    <Grid Visibility="{Binding HasNoSessions, Converter={StaticResource NotToVisibility}}">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="300" />
+                        <ColumnDefinition Width="280" />
                         <ColumnDefinition Width="6" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <ListBox ItemsSource="{Binding Sessions}" SelectedItem="{Binding SelectedSession}"
-                             BorderThickness="0" HorizontalContentAlignment="Stretch">
+                             BorderThickness="0" Background="Transparent" HorizontalContentAlignment="Stretch" ItemContainerStyle="{StaticResource ListRow}">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Margin="4,6">
-                                    <TextBlock FontWeight="SemiBold" Text="{Binding Title}" />
+                                <StackPanel Margin="4,2">
+                                    <DockPanel Margin="0,0,0,3">
+                                        <local:HeartbeatDot DockPanel.Dock="Right" Beat="{Binding Beat}" VerticalAlignment="Center" Margin="6,0,2,0" />
+                                        <local:AgentBadge Agent="{Binding Agent}" />
+                                        <TextBlock Style="{StaticResource StatLabel}" Margin="8,0,0,0" VerticalAlignment="Center" Text="{Binding PidText}" />
+                                    </DockPanel>
                                     <TextBlock Text="{Binding Summary}" />
                                     <TextBlock Style="{StaticResource StatLabel}" Text="{Binding Started}" />
-                                    <TextBlock Text="{Binding StuckText}" Foreground="{DynamicResource Accent}" FontWeight="SemiBold"
+                                    <TextBlock Text="{Binding StuckText}" Foreground="{DynamicResource Warn}" FontWeight="SemiBold"
                                                Visibility="{Binding HasStuck, Converter={StaticResource BoolToVisibility}}" />
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
-                    <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="{DynamicResource Card}" />
+                    <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
                     <DockPanel Grid.Column="2">
                         <TextBox DockPanel.Dock="Top" IsReadOnly="True" BorderThickness="0" Margin="4,4,4,8"
                                  TextWrapping="Wrap" Foreground="{DynamicResource Muted}"
                                  Text="{Binding SelectedSession.CommandLine, Mode=OneWay}" />
                         <DataGrid ItemsSource="{Binding SelectedSession.Members}" Style="{DynamicResource Grid}">
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="Process" Binding="{Binding Name}" FontFamily="Consolas" />
+                                <DataGridTextColumn Header="Process" Binding="{Binding Name}" FontFamily="Consolas" MinWidth="220" />
                                 <DataGridTextColumn Header="PID" Binding="{Binding Pid}" />
-                                <DataGridTextColumn Header="Memory" Binding="{Binding Memory}" SortMemberPath="MemoryBytes" />
-                                <DataGridTextColumn Header="CPU" Binding="{Binding Cpu}" SortMemberPath="CpuValue" />
+                                <DataGridTemplateColumn Header="Memory" CellTemplate="{StaticResource MemoryCell}" SortMemberPath="MemoryBytes" />
+                                <DataGridTemplateColumn Header="CPU" CellTemplate="{StaticResource CpuCell}" SortMemberPath="CpuValue" />
                                 <DataGridTextColumn Header="Idle" Binding="{Binding Idle}" />
                                 <DataGridTextColumn Header="Ports" Binding="{Binding Ports}" />
                                 <DataGridTemplateColumn Header="Status">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
                                             <StackPanel Orientation="Horizontal" Visibility="{Binding IsStuck, Converter={StaticResource BoolToVisibility}}">
-                                                <TextBlock Text="{Binding Status}" Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="2,0,6,0" />
+                                                <TextBlock Text="{Binding Status}" Foreground="{DynamicResource Warn}" VerticalAlignment="Center" Margin="2,0,6,0" />
                                                 <Button Content="Stop…" Padding="10,2" Margin="2" Click="StopStuck_Click"
                                                         Visibility="{Binding CanStop, Converter={StaticResource BoolToVisibility}}" />
                                             </StackPanel>
@@ -164,32 +256,32 @@
                             </DataGrid.Columns>
                         </DataGrid>
                     </DockPanel>
+                    </Grid>
                 </Grid>
             </TabItem>
 
             <!-- Projects: sessions, leftovers and ports grouped by repo / working folder -->
-            <TabItem Header="{Binding ProjectsHeader}">
+            <TabItem Header="Projects" local:Nav.Icon="&#xE8B7;" local:Nav.Badge="{Binding Projects.Count}" AutomationProperties.Name="{Binding ProjectsHeader}">
                 <Grid>
-                    <DataGrid ItemsSource="{Binding Projects}" Style="{DynamicResource Grid}">
+                    <DataGrid ItemsSource="{Binding Projects}" Style="{DynamicResource Grid}"
+                              Visibility="{Binding HasNoProjects, Converter={StaticResource NotToVisibility}}">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Project" Binding="{Binding Name}" FontWeight="SemiBold" />
                             <DataGridTextColumn Header="Sessions" Binding="{Binding Sessions}" />
                             <DataGridTextColumn Header="Procs" Binding="{Binding Processes}" />
-                            <DataGridTextColumn Header="Memory" Binding="{Binding Memory}" SortMemberPath="MemoryBytes" />
+                            <DataGridTemplateColumn Header="Memory" CellTemplate="{StaticResource MemoryCell}" SortMemberPath="MemoryBytes" />
                             <DataGridTextColumn Header="Leftovers" Binding="{Binding Leftovers}" />
                             <DataGridTextColumn Header="Ports" Binding="{Binding Ports}" />
                             <DataGridTextColumn Header="Folder" Binding="{Binding Path}" Width="*" />
                         </DataGrid.Columns>
                     </DataGrid>
-                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
-                               Foreground="{DynamicResource Muted}" TextWrapping="Wrap" MaxWidth="460"
-                               Text="No Claude Code, Codex or Gemini CLI sessions or leftovers right now. They are grouped here by the git repo (or folder) they run in."
-                               Visibility="{Binding HasNoProjects, Converter={StaticResource BoolToVisibility}}" />
+                    <local:EmptyState Title="No projects on the go." Text="No Claude Code, Codex or Gemini CLI sessions or leftovers right now. They are grouped here by the git repo (or folder) they run in."
+                                      Visibility="{Binding HasNoProjects, Converter={StaticResource BoolToVisibility}}" />
                 </Grid>
             </TabItem>
 
             <!-- Ports: who is listening, and freeing one -->
-            <TabItem Header="{Binding PortsHeader}">
+            <TabItem Header="Ports" local:Nav.Icon="&#xE968;" local:Nav.Group="Network" local:Nav.Badge="{Binding Ports.Count}" AutomationProperties.Name="{Binding PortsHeader}">
                 <DockPanel>
                     <DockPanel DockPanel.Dock="Top" Margin="4,4,4,8">
                         <TextBlock DockPanel.Dock="Left" Text="Find:" VerticalAlignment="Center" Margin="0,0,8,0" />
@@ -220,7 +312,7 @@
             </TabItem>
 
             <!-- Firewall: block ports with Windows Firewall rules (nothing until the user ticks and applies) -->
-            <TabItem Header="Firewall" x:Name="FirewallTab">
+            <TabItem Header="Firewall" local:Nav.Icon="&#xEA18;" x:Name="FirewallTab">
                 <DockPanel Margin="4">
                     <Border DockPanel.Dock="Top" Style="{StaticResource StatCard}" Margin="0,0,0,10">
                         <StackPanel>
@@ -315,7 +407,7 @@
             </TabItem>
 
             <!-- Findings -->
-            <TabItem Header="{Binding FindingsHeader}">
+            <TabItem Header="Findings" local:Nav.Icon="&#xEA80;" local:Nav.Group="Care" local:Nav.Badge="{Binding Findings.Count}" local:Nav.Urgent="True" AutomationProperties.Name="{Binding FindingsHeader}">
                 <Grid>
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <ItemsControl ItemsSource="{Binding Findings}" Margin="4">
@@ -335,29 +427,31 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </ScrollViewer>
-                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"
-                               Text="No findings right now."
-                               Visibility="{Binding HasNoFindings, Converter={StaticResource BoolToVisibility}}" />
+                    <local:EmptyState Title="Nothing to report." Text="No findings right now. If something looks stuck or wasteful, it'll be explained here."
+                                      Visibility="{Binding HasNoFindings, Converter={StaticResource BoolToVisibility}}" />
                 </Grid>
             </TabItem>
 
             <!-- Health: the agents' own health checks -->
-            <TabItem Header="Health" x:Name="HealthTab">
+            <TabItem Header="Health" local:Nav.Icon="&#xE95E;" x:Name="HealthTab">
                 <DockPanel Margin="4">
                     <Border DockPanel.Dock="Top" Style="{StaticResource StatCard}" Margin="0,0,0,10">
                         <StackPanel>
                             <DockPanel>
-                                <Button DockPanel.Dock="Right" Content="Run health checks" Padding="10,3" Click="RunHealthChecks_Click" IsEnabled="{Binding IsIdle}" />
+                                <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Run health checks" Click="RunHealthChecks_Click" IsEnabled="{Binding IsIdle}" />
                                 <TextBlock FontWeight="SemiBold" Text="Agent health checks" VerticalAlignment="Center" />
                             </DockPanel>
                             <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="0,2,0,6"
                                        Text="Runs claude doctor, codex doctor, and for Gemini CLI (which has no doctor) its version, MCP servers and settings file. One at a time, at low priority, with no window. They check installs, sign-in, config and MCP servers, not what makes the PC slow: the other tabs show that. For a fuller Claude checkup that can also fix things, run /doctor in a Claude Code session." />
-                            <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Foreground="{DynamicResource Accent}" Text="{Binding Slowdown}"
+                            <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Foreground="{DynamicResource Warn}" Text="{Binding Slowdown}"
                                        Visibility="{Binding HasSlowdown, Converter={StaticResource BoolToVisibility}}" />
                             <TextBlock Style="{StaticResource StatLabel}" Text="{Binding Status}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid>
+                    <local:EmptyState Title="Ready for a checkup." Text="Run the health checks to see how each agent's install, sign-in and MCP servers are doing."
+                                      Visibility="{Binding Reports.Count, Converter={StaticResource ZeroToVisibility}}" />
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding Reports.Count, Converter={StaticResource ZeroToVisibility}, ConverterParameter=Invert}">
                         <ItemsControl ItemsSource="{Binding Reports}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
@@ -387,11 +481,12 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </ScrollViewer>
+                    </Grid>
                 </DockPanel>
             </TabItem>
 
             <!-- Cleanup: WSL memory and disk -->
-            <TabItem Header="Cleanup" x:Name="CleanupTab">
+            <TabItem Header="Cleanup" local:Nav.Icon="&#xEDA2;" x:Name="CleanupTab">
                 <DockPanel Margin="4">
                     <Border DockPanel.Dock="Top" Style="{StaticResource StatCard}" Margin="0,0,0,10">
                         <StackPanel>
@@ -436,10 +531,14 @@
                         </StackPanel>
                     </Border>
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                        <Button DockPanel.Dock="Left" Content="Scan disk" Padding="10,3" Margin="0,0,10,0" Click="Scan_Click" IsEnabled="{Binding IsIdle}" />
+                        <Button DockPanel.Dock="Left" Style="{StaticResource PrimaryButton}" Content="Scan disk" Margin="0,0,10,0" Click="Scan_Click" IsEnabled="{Binding IsIdle}" />
                         <TextBlock VerticalAlignment="Center" Style="{StaticResource StatLabel}" Text="{Binding ScanStatus}" TextWrapping="Wrap" />
                     </DockPanel>
-                    <DataGrid ItemsSource="{Binding Targets}" Style="{DynamicResource Grid}">
+                    <Grid>
+                    <local:EmptyState Title="Nothing on the list." Text="Scan disk looks for old temp folders, caches and stale worktrees. Nothing is removed until you choose it and confirm."
+                                      Visibility="{Binding Targets.Count, Converter={StaticResource ZeroToVisibility}}" />
+                    <DataGrid ItemsSource="{Binding Targets}" Style="{DynamicResource Grid}"
+                              Visibility="{Binding Targets.Count, Converter={StaticResource ZeroToVisibility}, ConverterParameter=Invert}">
                         <DataGrid.Columns>
                             <DataGridTemplateColumn Header="" Width="Auto">
                                 <DataGridTemplateColumn.CellTemplate>
@@ -454,13 +553,40 @@
                             <DataGridTextColumn Header="Details" Binding="{Binding Description}" Width="*" />
                         </DataGrid.Columns>
                     </DataGrid>
+                    </Grid>
                 </DockPanel>
             </TabItem>
 
             <!-- History -->
-            <TabItem Header="History" x:Name="HistoryTab">
+            <TabItem Header="History" local:Nav.Icon="&#xE81C;" local:Nav.Group="Story" x:Name="HistoryTab">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="4">
+                    <StackPanel Margin="0,0,6,0">
+                        <Border Style="{StaticResource StatCard}" Margin="0,0,0,14">
+                            <DockPanel>
+                                <ItemsControl DockPanel.Dock="Right" Width="330" Margin="20,0,0,0" ItemsSource="{Binding FreedDays}"
+                                              AutomationProperties.Name="Memory freed each day, last two weeks">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <UniformGrid Rows="1" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Background="Transparent" ToolTip="{Binding Tip}" VerticalAlignment="Bottom">
+                                                <Border Height="{Binding BarHeight}" Width="16" CornerRadius="4,4,0,0" VerticalAlignment="Bottom" Background="{DynamicResource Accent}" />
+                                                <TextBlock Style="{StaticResource StatLabel}" FontSize="10" Height="15" Margin="-40,3,-40,0" TextAlignment="Center" Text="{Binding Label}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Style="{StaticResource StatValue}" Text="{Binding FreedTotal}" />
+                                    <TextBlock Text="{Binding FreedToday}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                    <TextBlock Style="{StaticResource StatLabel}" Text="{Binding FreedAllTime}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+
                         <TextBlock FontWeight="SemiBold" Text="AI-tool memory, last 24 hours" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="0,2,0,6"
                                    Text="All AI coding tools together, and the four projects that used the most. One point a minute while AgentReclaim runs; hover for values." />
@@ -489,10 +615,6 @@
                             <local:HistoryChart x:Name="Chart" Height="240" />
                         </Border>
 
-                        <TextBlock FontWeight="SemiBold" Text="Freed" Margin="0,14,0,2" />
-                        <TextBlock Text="{Binding FreedToday}" TextWrapping="Wrap" />
-                        <TextBlock Style="{StaticResource StatLabel}" Text="{Binding FreedAllTime}" TextWrapping="Wrap" />
-
                         <TextBlock FontWeight="SemiBold" Text="Projects (as a table)" Margin="0,14,0,4" />
                         <DataGrid ItemsSource="{Binding Projects}" Style="{DynamicResource Grid}" MaxHeight="260">
                             <DataGrid.Columns>
@@ -514,12 +636,17 @@
             </TabItem>
 
             <!-- Activity -->
-            <TabItem Header="Activity">
+            <TabItem Header="Activity" local:Nav.Icon="&#xE8FD;">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Margin="4,4,4,8" Style="{StaticResource StatLabel}" TextWrapping="Wrap">
                         Everything AgentReclaim stops is written, with its command line and folder, to actions.jsonl in the data folder (tray menu → Open data folder). Relaunch starts it again in a new window.
                     </TextBlock>
-                    <ListBox ItemsSource="{Binding Activity}" BorderThickness="0" HorizontalContentAlignment="Stretch">
+                    <Grid>
+                    <local:EmptyState Title="Nothing yet." Text="Everything AgentReclaim stops or notices is listed here, newest first."
+                                      Visibility="{Binding Activity.Count, Converter={StaticResource ZeroToVisibility}}" />
+                    <ListBox ItemsSource="{Binding Activity}" BorderThickness="0" Background="Transparent" HorizontalContentAlignment="Stretch"
+                             ItemContainerStyle="{StaticResource ListRow}"
+                             Visibility="{Binding Activity.Count, Converter={StaticResource ZeroToVisibility}, ConverterParameter=Invert}">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <DockPanel Margin="2,3">
@@ -531,24 +658,27 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                    </Grid>
                 </DockPanel>
             </TabItem>
 
             <!-- Settings -->
-            <TabItem Header="Settings" x:Name="SettingsTab">
+            <TabItem Header="Settings" local:Nav.Icon="&#xE713;" local:Nav.Group="You" x:Name="SettingsTab">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="8" MaxWidth="760" HorizontalAlignment="Left">
+                    <StackPanel Margin="0,0,10,0" MaxWidth="820" HorizontalAlignment="Left">
                         <StackPanel.Resources>
                             <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
                                 <Setter Property="Width" Value="60" />
                                 <Setter Property="Margin" Value="6,0" />
                             </Style>
-                            <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                            <Style TargetType="CheckBox" BasedOn="{StaticResource ToggleSwitch}">
                                 <Setter Property="Margin" Value="0,10,0,2" />
                                 <Setter Property="FontWeight" Value="SemiBold" />
                             </Style>
                         </StackPanel.Resources>
 
+                        <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="Appearance" />
                         <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                             <TextBlock Text="Theme:" VerticalAlignment="Center" Margin="0,0,8,0" />
@@ -558,8 +688,11 @@
                                 <ComboBoxItem Content="Dark" />
                             </ComboBox>
                         </StackPanel>
-
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Automatic actions (all off by default)" Margin="0,20,0,0" />
+                        </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Automatic actions (all off by default)" />
 
                         <CheckBox Content="Stop leftovers automatically" IsChecked="{Binding AutoStopLeftovers}" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
@@ -598,8 +731,11 @@
                         </StackPanel>
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,4,0,0"
                                    Text="Puts what each agent starts (builds, tests, dev servers, and their children, added within a few seconds of starting) into a Windows job object with this memory limit. The agent itself, other agents and IDEs are never capped. When the limit is reached, the next allocation fails, so a build or server can stop with an out-of-memory error; AgentReclaim tells you when a session hits its cap. Turning this off lifts the caps, except on processes capped before AgentReclaim last restarted (Windows can't take a process out of a job), which keep theirs until they exit." />
-
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Notifications" Margin="0,20,0,0" />
+                        </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Notifications" />
                         <CheckBox Content="Tell me when memory is running low" IsChecked="{Binding LowMemoryAlerts}" />
                         <StackPanel Orientation="Horizontal" Margin="20,4,0,0">
                             <TextBlock Text="When memory use stays above" VerticalAlignment="Center" />
@@ -637,8 +773,11 @@
                         </StackPanel>
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
                                    Text="Shown on the Sessions and Findings tabs either way; this only adds a notification. A command waiting for a password or yes/no prompt nobody can see looks like this, and so does a loop. It's a guess from CPU use, and nothing is stopped: Stop… on the Sessions tab ends a stuck command (never the agent itself)." />
-
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Disk cleanup" Margin="0,20,0,0" />
+                        </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Disk cleanup" />
                         <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                             <TextBlock Text="Only offer folders untouched for" VerticalAlignment="Center" />
                             <TextBox Text="{Binding CleanupMinAgeDays, UpdateSourceTrigger=LostFocus}" />
@@ -646,8 +785,11 @@
                         </StackPanel>
                         <TextBlock Text="Folders with your git repos (one per line; checked two levels deep for stale worktrees):" Margin="0,8,0,2" />
                         <TextBox Text="{Binding ProjectRoots, UpdateSourceTrigger=LostFocus}" Width="Auto" Margin="0" AcceptsReturn="True" MinHeight="50" />
-
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Integrations" Margin="0,20,0,0" />
+                        </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Integrations" />
                         <TextBlock FontWeight="SemiBold" Text="Claude Code SessionEnd hook" Margin="0,8,0,0" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap"
                                    Text="Adds one hook to ~/.claude/settings.json (with a backup) that tells AgentReclaim when a session ends." />
@@ -667,11 +809,17 @@
                         <CheckBox Content="Let agents stop their own processes (off by default)" IsChecked="{Binding AllowAgentSelfStop}" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
                                    Text="Turns on the stop_my_process tool: the agent that started the MCP server can stop processes in its own tree (e.g. a dev server it left holding a port) and leftovers it was seen starting. Never itself, another agent, anything outside its tree, or protected processes. Every stop is written to the activity log. Your MCP client still asks before each call unless you allowed the tool." />
-
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Startup" Margin="0,20,0,0" />
+                        </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Startup" />
                         <CheckBox Content="Start with Windows (in the tray)" IsChecked="{Binding StartWithWindows}" />
-
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Updates" Margin="0,20,0,0" />
+                        </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Updates" />
                         <TextBlock Text="{Binding VersionText}" Margin="0,6,0,0" />
                         <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                             <TextBlock Text="When a new version is released:" VerticalAlignment="Center" Margin="0,0,8,0" />
@@ -689,8 +837,11 @@
                             <Button Content="Install update" Padding="10,3" Margin="0,0,8,0" Click="InstallUpdate_Click" IsEnabled="{Binding UpdateAvailable}" />
                             <Button Content="Release notes" Padding="10,3" Click="ReleaseNotes_Click" />
                         </StackPanel>
-
-                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Diagnostics" Margin="0,20,0,0" />
+                        </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="Diagnostics" />
                         <CheckBox Content="Debug logging" IsChecked="{Binding DebugLogging}" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
                                    Text="Logs polls when something changes and decisions, not just actions and errors. Logs stay on this PC (7 days, 10 MB a day). Debug logs include command lines, which can contain secrets passed as arguments: check before sharing one." />
@@ -698,9 +849,25 @@
                             <Button Content="Open logs folder" Padding="10,3" Margin="0,0,8,0" Click="OpenLogs_Click" />
                             <Button Content="Copy diagnostics" Padding="10,3" Click="CopyDiagnostics_Click" />
                         </StackPanel>
+                        </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
-        </TabControl>
-    </DockPanel>
+        </local:NavTabControl>
+
+        <!-- Good news: over everything, and never in the way of a click. -->
+        <Canvas x:Name="Sparkles" IsHitTestVisible="False" />
+        <Border x:Name="Toast" Visibility="Collapsed" Opacity="0" IsHitTestVisible="False" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="212,0,0,34" Padding="14,8,20,8" CornerRadius="14" Background="{DynamicResource Card}"
+                BorderBrush="{DynamicResource Good}" BorderThickness="1.5">
+            <StackPanel Orientation="Horizontal">
+                <local:Mascot x:Name="ToastMascot" Width="44" Height="44" Mood="Proud" Margin="0,0,10,0" />
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="ToastAmount" FontSize="17" FontWeight="SemiBold" AutomationProperties.LiveSetting="Polite" />
+                    <TextBlock Style="{StaticResource StatLabel}" Text="Nice and tidy." />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
 </Window>

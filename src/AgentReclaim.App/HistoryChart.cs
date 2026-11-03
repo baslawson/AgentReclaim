@@ -71,7 +71,8 @@ public sealed class HistoryChart : FrameworkElement
 
         if (_times.Count < 2)
         {
-            Text(dc, "Collecting: one point a minute. The chart fills in as AgentReclaim runs.", muted, plot.Left, plot.Top + plot.Height / 2 - 8, dpi);
+            var waiting = Formatted("Collecting: one point a minute. The chart fills in as AgentReclaim runs.", muted, dpi);
+            dc.DrawText(waiting, new Point((w - waiting.Width) / 2, (h - waiting.Height) / 2));
             return;
         }
 

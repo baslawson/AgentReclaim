@@ -9,12 +9,18 @@ using AgentReclaim.Core.Analysis;
 
 namespace AgentReclaim.App;
 
-/// <summary>Tray icon drawn as a memory gauge, with an orange dot when there are leftovers to clean.</summary>
+/// <summary>
+/// Tray icon: the mascot's face inside a memory ring, with an orange dot when there are leftovers to clean. It gives a
+/// little wiggle when memory was freed. The ring's colour uses the same limits as the window's gauge.
+/// </summary>
 internal sealed class TrayIcon : IDisposable
 {
     private readonly NotifyIcon _icon;
-    private readonly Dictionary<(int Bucket, bool Leftovers), Icon> _icons = new();
-    private (int Bucket, bool Leftovers)? _shown;
+    private readonly Dictionary<(int Bucket, MeterState Meter, bool Leftovers, int Tilt), Icon> _icons = new();
+    private (int Bucket, MeterState Meter, bool Leftovers)? _shown;
+    private readonly System.Windows.Forms.Timer _wiggle = new() { Interval = 110 };
+    private int _wiggleFrame = -1;
+    private static readonly int[] WiggleTilts = [-14, 14, -10, 10, -5, 5, 0];
     private readonly ToolStripMenuItem _freeSafe;
     private readonly ToolStripMenuItem _pause;
     private readonly Action _open;
@@ -47,11 +53,12 @@ internal sealed class TrayIcon : IDisposable
         {
             Text = "AgentReclaim: starting…",
             ContextMenuStrip = menu,
-            Icon = GetIcon(0, false),
+            Icon = GetIcon(0, MeterState.Good, false, 0),
             Visible = true,
         };
         _icon.DoubleClick += (_, _) => open();
         _icon.BalloonTipClicked += (_, _) => (_onBalloonClick ?? _open)();
+        _wiggle.Tick += (_, _) => NextWiggleFrame();
     }
 
     public void Update(AnalysisResult result, IReadOnlyList<OrphanTree> safeLeftovers)
@@ -62,11 +69,11 @@ internal sealed class TrayIcon : IDisposable
             : "Free safe leftovers (none right now)";
 
         var system = result.Snapshot.System;
-        var state = ((int)Math.Round(system.MemoryLoad * 10), result.Orphans.Count > 0);
+        var state = ((int)Math.Round(system.MemoryLoad * 10), Personality.Meter(system.MemoryLoad), result.Orphans.Count > 0);
         if (_shown != state)
         {
-            _icon.Icon = GetIcon(state.Item1, state.Item2);
             _shown = state;
+            if (_wiggleFrame < 0) _icon.Icon = GetIcon(state.Item1, state.Item2, state.Item3, 0); // otherwise the wiggle ends on it
         }
 
         var text = $"AgentReclaim\nRAM {Format.Bytes(system.UsedMemoryBytes)} / {Format.Bytes(system.TotalMemoryBytes)}" +
@@ -74,6 +81,27 @@ internal sealed class TrayIcon : IDisposable
         if (result.Orphans.Count > 0)
             text += $"\n{result.Orphans.Count} leftover(s), {Format.Bytes(result.OrphanPrivateBytes)}";
         _icon.Text = text.Length > 127 ? text[..127] : text;
+    }
+
+    /// <summary>A short wiggle, about a second, then back to the normal icon. Respects Windows' animation setting.</summary>
+    public void Wiggle()
+    {
+        if (!Motion.Enabled || _wiggleFrame >= 0) return;
+        _wiggleFrame = 0;
+        _wiggle.Start();
+    }
+
+    private void NextWiggleFrame()
+    {
+        var (bucket, meter, leftovers) = _shown ?? (0, MeterState.Good, false);
+        if (_wiggleFrame >= WiggleTilts.Length)
+        {
+            _wiggle.Stop();
+            _wiggleFrame = -1;
+            _icon.Icon = GetIcon(bucket, meter, leftovers, 0);
+            return;
+        }
+        _icon.Icon = GetIcon(bucket, meter, leftovers, WiggleTilts[_wiggleFrame++]);
     }
 
     /// <summary>A Windows notification; clicking it opens the window (or does <paramref name="onClick"/>).</summary>
@@ -89,29 +117,44 @@ internal sealed class TrayIcon : IDisposable
         Process.Start(new ProcessStartInfo(AppPaths.DataDirectory) { UseShellExecute = true });
     }
 
-    private Icon GetIcon(int bucket, bool leftovers)
+    private Icon GetIcon(int bucket, MeterState meter, bool leftovers, int tilt)
     {
-        if (_icons.TryGetValue((bucket, leftovers), out var cached)) return cached;
+        var key = (bucket, meter, leftovers, tilt);
+        if (_icons.TryGetValue(key, out var cached)) return cached;
 
-        var gauge = bucket >= 9 ? Color.FromArgb(0xC6, 0x3B, 0x2F)
-            : bucket >= 7 ? Color.FromArgb(0xD9, 0x9A, 0x1E)
-            : Color.FromArgb(0x3C, 0x8D, 0x5A);
+        var gauge = meter switch
+        {
+            MeterState.Danger => Color.FromArgb(0xE5, 0x4B, 0x3F),
+            MeterState.Warn => Color.FromArgb(0xE8, 0xA8, 0x2A),
+            _ => Color.FromArgb(0x3F, 0xB8, 0x7A),
+        };
 
         using var bitmap = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bitmap))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Color.Transparent);
-            using var track = new SolidBrush(Color.FromArgb(0x55, 0x55, 0x55));
-            using var fill = new SolidBrush(gauge);
-            g.FillEllipse(track, 1, 1, 30, 30);
-            g.FillPie(fill, 1, 1, 30, 30, -90, Math.Max(1, bucket) * 36);
-            using var hole = new SolidBrush(Color.FromArgb(0x22, 0x22, 0x22));
-            g.FillEllipse(hole, 9, 9, 14, 14);
 
+            g.TranslateTransform(16, 16);
+            g.RotateTransform(tilt);
+            g.TranslateTransform(-16, -16);
+
+            using var track = new Pen(Color.FromArgb(0x80, 0x80, 0x80), 4);
+            using var fill = new Pen(gauge, 4) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawEllipse(track, 2.5f, 2.5f, 27, 27);
+            g.DrawArc(fill, 2.5f, 2.5f, 27, 27, -90, Math.Max(1, bucket) * 36);
+
+            // The mascot's face: a dark visor disc with two eyes, readable on light and dark taskbars.
+            using var visor = new SolidBrush(Color.FromArgb(0x14, 0x1B, 0x24));
+            using var eye = new SolidBrush(Color.White);
+            g.FillEllipse(visor, 7, 7, 18, 18);
+            g.FillEllipse(eye, 10.5f, 12, 4.5f, 5.5f);
+            g.FillEllipse(eye, 17, 12, 4.5f, 5.5f);
+
+            g.ResetTransform();
             if (leftovers)
             {
-                using var dot = new SolidBrush(Color.FromArgb(0xD9, 0x77, 0x2B));
+                using var dot = new SolidBrush(Color.FromArgb(0xF0, 0x95, 0x4E));
                 using var outline = new Pen(Color.White, 2);
                 g.FillEllipse(dot, 18, 0, 13, 13);
                 g.DrawEllipse(outline, 18, 0, 13, 13);
@@ -121,12 +164,13 @@ internal sealed class TrayIcon : IDisposable
         var handle = bitmap.GetHicon();
         var icon = (Icon)Icon.FromHandle(handle).Clone();
         DestroyIcon(handle);
-        _icons[(bucket, leftovers)] = icon;
+        _icons[key] = icon;
         return icon;
     }
 
     public void Dispose()
     {
+        _wiggle.Dispose();
         _icon.Visible = false;
         _icon.Dispose();
         foreach (var icon in _icons.Values) icon.Dispose();

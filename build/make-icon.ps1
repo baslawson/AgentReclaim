@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Draws the AgentReclaim app icon (a usage gauge whose green arc is an arrow sweeping back to "low")
+  Draws the AgentReclaim app icon (the mascot, a friendly robot vacuum, on an orange tile)
   at every Windows icon size and writes src/AgentReclaim.App/Assets/AgentReclaim.ico plus a 256 px PNG.
 #>
 param([string]$OutDir = (Join-Path $PSScriptRoot "..\src\AgentReclaim.App\Assets"))
@@ -33,48 +33,46 @@ function Draw-Icon([int]$size) {
     $g.Clear([System.Drawing.Color]::Transparent)
     $g.ScaleTransform($size / 256.0, $size / 256.0)
 
-    # Small sizes get bolder strokes and fewer details so they stay legible.
+    # Small sizes drop the details and enlarge the face so they stay legible.
     $small = $size -le 32
     $inset = if ($small) { 4 } else { 10 }
 
-    # Tile: dark slate, subtle top-to-bottom gradient.
     $tile = New-RoundedRect $inset $inset (256 - 2 * $inset) (256 - 2 * $inset) $(if ($small) { 44 } else { 52 })
     $bg = [System.Drawing.Drawing2D.LinearGradientBrush]::new(
         [System.Drawing.PointF]::new(0, 0), [System.Drawing.PointF]::new(0, 256),
-        [System.Drawing.Color]::FromArgb(0x2E, 0x3D, 0x4F), [System.Drawing.Color]::FromArgb(0x14, 0x1B, 0x24))
+        [System.Drawing.Color]::FromArgb(0xF9, 0xA8, 0x62), [System.Drawing.Color]::FromArgb(0xD2, 0x6A, 0x1E))
     $g.FillPath($bg, $tile)
 
-    $cx = 128; $cy = 146; $r = if ($small) { 80 } else { 84 }
-    $w = if ($small) { 40 } else { 28 }
-    $box = [System.Drawing.RectangleF]::new($cx - $r, $cy - $r, 2 * $r, 2 * $r)
-    $gap = if ($small) { 0 } else { 5 }
+    $body = [System.Drawing.Drawing2D.LinearGradientBrush]::new(
+        [System.Drawing.PointF]::new(0, 40), [System.Drawing.PointF]::new(0, 240),
+        [System.Drawing.Color]::FromArgb(0x4A, 0x5C, 0x70), [System.Drawing.Color]::FromArgb(0x24, 0x30, 0x3D))
+    $visor = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(0x14, 0x1B, 0x24))
+    $white = [System.Drawing.Brushes]::White
 
-    # Gauge: 240 degrees from lower left (150) clockwise to lower right (30).
-    $green = [System.Drawing.Color]::FromArgb(0x4C, 0xB8, 0x72)
-    $amber = [System.Drawing.Color]::FromArgb(0xE8, 0xA8, 0x2A)
-    $red = [System.Drawing.Color]::FromArgb(0xD9, 0x4A, 0x3B)
-    foreach ($seg in @(@{ C = $amber; S = 270; E = 330 }, @{ C = $red; S = 330; E = 390 })) {
-        $pen = [System.Drawing.Pen]::new($seg.C, $w)
-        $g.DrawArc($pen, $box, $seg.S + $gap / 2, $seg.E - $seg.S - $gap)
+    if ($small) {
+        $g.FillEllipse($body, 20, 42, 216, 192)
+        $g.FillPath($visor, (New-RoundedRect 40 84 176 104 52))
+        $g.FillEllipse($white, 72, 106, 42, 58)
+        $g.FillEllipse($white, 142, 106, 42, 58)
     }
+    else {
+        $antenna = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(0x24, 0x30, 0x3D), 9)
+        $antenna.StartCap = "Round"
+        $g.DrawLine($antenna, 128, 64, 128, 38)
+        $g.FillEllipse([System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(0x4C, 0xC3, 0x8A)), 114, 22, 28, 28)
 
-    # Green arc ending in an arrowhead at the low end: usage swept back down.
-    $arrowLen = if ($small) { 30 } else { 34 }
-    $tipDeg = 150 + $arrowLen * 0.55
-    $pen = [System.Drawing.Pen]::new($green, $w)
-    $g.DrawArc($pen, $box, $tipDeg + 8, 270 - $tipDeg - 8 - $gap / 2)
-    $head = $w * 1.05
-    $tip = Get-Point $cx $cy $r 150
-    $outer = Get-Point $cx $cy ($r + $head) ($tipDeg + 10)
-    $inner = Get-Point $cx $cy ($r - $head) ($tipDeg + 10)
-    $g.FillPolygon([System.Drawing.SolidBrush]::new($green), [System.Drawing.PointF[]]@($tip, $outer, $inner))
+        $g.FillEllipse($body, 30, 58, 196, 170)
+        $g.FillPath($visor, (New-RoundedRect 56 98 144 84 42))
+        $g.FillEllipse($white, 88, 116, 26, 30)
+        $g.FillEllipse($white, 142, 116, 26, 30)
+        $smile = [System.Drawing.Pen]::new([System.Drawing.Color]::White, 8)
+        $smile.StartCap = "Round"; $smile.EndCap = "Round"
+        $g.DrawArc($smile, 104, 124, 48, 40, 35, 110)
 
-    # Needle pointing into the green, with a hub.
-    $needle = [System.Drawing.Pen]::new([System.Drawing.Color]::White, $(if ($small) { 20 } else { 14 }))
-    $needle.StartCap = "Round"; $needle.EndCap = "Round"
-    $g.DrawLine($needle, [System.Drawing.PointF]::new($cx, $cy), (Get-Point $cx $cy ($r - $(if ($small) { 30 } else { 34 })) 212))
-    $hub = if ($small) { 22 } else { 17 }
-    $g.FillEllipse([System.Drawing.Brushes]::White, $cx - $hub, $cy - $hub, 2 * $hub, 2 * $hub)
+        $bumper = [System.Drawing.Pen]::new([System.Drawing.Color]::White, 10)
+        $bumper.StartCap = "Round"; $bumper.EndCap = "Round"
+        $g.DrawArc($bumper, 42, 66, 172, 150, 35, 110)
+    }
 
     $g.Dispose()
     $bmp

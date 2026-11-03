@@ -39,7 +39,10 @@ public sealed class OrphanRow(OrphanTree tree) : Row<OrphanTree>(tree)
     public int Processes => Model.Root.TotalCount;
     public long MemoryBytes => Model.Root.TotalPrivateBytes;
     public string Memory => Format.Bytes(MemoryBytes);
-    public string Cpu => Format.Percent(Model.Root.TotalCpuPercent);
+    public double MemoryShare { get; set; }
+    public double CpuValue => Model.Root.TotalCpuPercent;
+    public string Cpu => Format.Percent(CpuValue);
+    public double CpuShare => Math.Clamp(CpuValue / 100, 0, 1);
     public string Idle => Format.Duration(Model.Root.SelfAndDescendants().Min(x => x.Node.IdleFor));
     public string Ports => string.Join(", ", Model.Root.SelfAndDescendants().SelectMany(x => x.Node.Process.ListeningPorts).Distinct());
     public string Owner => Model.FormerOwner;
@@ -58,8 +61,13 @@ public sealed class SessionRow(AgentSession session) : Row<AgentSession>(session
 {
     public ObservableCollection<MemberRow> Members { get; } = [];
 
-    public string Title => $"{AgentSignatures.DisplayName(Model.Kind)} · pid {Model.Root.Process.Pid}";
-    public string Summary => $"{Model.Root.TotalCount} process{(Model.Root.TotalCount == 1 ? "" : "es")} ·{Format.Bytes(Model.Root.TotalPrivateBytes)} · {Format.Percent(Model.Root.TotalCpuPercent)} CPU";
+    public string Agent => AgentSignatures.DisplayName(Model.Kind);
+    public string PidText => $"pid {Model.Root.Process.Pid}";
+
+    /// <summary>Goes up with each fresh poll, which pulses the session's dot once.</summary>
+    public int Beat { get; set; }
+
+    public string Summary => $"{Model.Root.TotalCount} process{(Model.Root.TotalCount == 1 ? "" : "es")} · {Format.Bytes(Model.Root.TotalPrivateBytes)} · {Format.Percent(Model.Root.TotalCpuPercent)} CPU";
     public string Started => Model.Root.Process.StartTimeUtc == DateTime.MinValue
         ? ""
         : $"Started {Model.Root.Process.StartTimeUtc.ToLocalTime():g}";
@@ -80,13 +88,18 @@ public sealed class SessionRow(AgentSession session) : Row<AgentSession>(session
         Raise(nameof(HasStuck));
     }
 
-    public void SyncMembers() => CollectionSync.Sync(
-        Members,
-        Model.Root.SelfAndDescendants(),
-        x => x.Node.Process.Key,
-        r => r.Model.Node.Process.Key,
-        x => new MemberRow(x, StuckOf),
-        (row, x) => row.Update(x));
+    public void SyncMembers()
+    {
+        CollectionSync.Sync(
+            Members,
+            Model.Root.SelfAndDescendants(),
+            x => x.Node.Process.Key,
+            r => r.Model.Node.Process.Key,
+            x => new MemberRow(x, StuckOf),
+            (row, x) => row.Update(x));
+        var largest = Math.Max(1, Members.Select(m => m.MemoryBytes).DefaultIfEmpty().Max());
+        foreach (var member in Members) member.SetShare(member.MemoryBytes / (double)largest);
+    }
 
     private StuckProcess? StuckOf(ProcessKey key) => _stuck.GetValueOrDefault(key);
 }
@@ -113,11 +126,19 @@ public sealed class MemberRow((ProcessNode Node, int Depth) item, Func<ProcessKe
     public int Pid => Process.Pid;
     public long MemoryBytes => Process.PrivateBytes;
     public string Memory => Format.Bytes(MemoryBytes);
+    public double MemoryShare { get; private set; }
     public double CpuValue => Process.CpuPercent;
     public string Cpu => Format.Percent(Process.CpuPercent);
+    public double CpuShare => Math.Clamp(CpuValue / 100, 0, 1);
     public string Idle => Format.Duration(Model.Node.IdleFor);
     public string Ports => string.Join(", ", Process.ListeningPorts);
     public string CommandLine => Process.CommandLine ?? "";
+
+    public void SetShare(double share)
+    {
+        MemoryShare = share;
+        Raise(nameof(MemoryShare));
+    }
 }
 
 public sealed class PortRow(PortEntry entry) : Row<PortEntry>(entry)
@@ -155,6 +176,7 @@ public sealed class ProjectRow(ProjectSummary project) : Row<ProjectSummary>(pro
     public int Processes => Model.Processes;
     public long MemoryBytes => Model.TotalBytes;
     public string Memory => Format.Bytes(MemoryBytes);
+    public double MemoryShare { get; set; }
     public string Leftovers => Model.Leftovers.Count == 0 ? "" : $"{Model.Leftovers.Count} ({Format.Bytes(Model.LeftoverBytes)})";
     public string Ports => string.Join(", ", Model.Ports);
 
@@ -178,6 +200,17 @@ public sealed class MainViewModel : ObservableObject
     private AnalysisResult? _latest;
     private SessionRow? _selectedSession;
     private string _status = "Collecting first snapshot…";
+    private readonly RollingSeries _cpuHistory = new(HistoryPoints);
+    private readonly RollingSeries _agentHistory = new(HistoryPoints);
+    private double[] _cpuPoints = [];
+    private double[] _agentPoints = [];
+    private ReclaimTally _tally = new();
+    private bool _proud;
+    private int _beat;
+    private int _safeLeftovers;
+
+    /// <summary>Two minutes at the usual three seconds a poll.</summary>
+    private const int HistoryPoints = 40;
 
     public ObservableCollection<OrphanRow> Orphans { get; } = [];
     public ObservableCollection<SessionRow> Sessions { get; } = [];
@@ -199,12 +232,43 @@ public sealed class MainViewModel : ObservableObject
 
     public string Status => _status;
 
-    public string SystemMemory => _latest is null ? "–" : $"{Format.Bytes(_latest.Snapshot.System.UsedMemoryBytes)} / {Format.Bytes(_latest.Snapshot.System.TotalMemoryBytes)}";
+    public double MemoryFraction => _latest?.Snapshot.System.MemoryLoad ?? 0;
+    public MeterState MemoryState => Personality.Meter(MemoryFraction);
+    public string MemoryPercent => _latest is null ? "–" : $"{MemoryFraction * 100:0}%";
+    public string MemoryWord => _latest is null ? "" : Personality.MemoryWord(MemoryFraction);
+    public string SystemMemory => _latest is null ? "–" : $"{Format.Bytes(_latest.Snapshot.System.UsedMemoryBytes)} of {Format.Bytes(_latest.Snapshot.System.TotalMemoryBytes)}";
     public string SystemCpu => _latest is null ? "–" : Format.Percent(_latest.Snapshot.System.CpuPercent);
     public string AgentMemory => _latest is null ? "–" : Format.Bytes(_latest.AgentPrivateBytes);
-    public string AgentMemoryDetail => _latest is null ? "" : $"{_latest.Sessions.Count} live session(s)";
-    public string Leftovers => _latest is null ? "–" : _latest.Orphans.Count == 0 ? "None" : Format.Bytes(_latest.OrphanPrivateBytes);
-    public string LeftoversDetail => _latest is null ? "" : $"{_latest.Orphans.Count} leftover tree(s)";
+    public string AgentMemoryDetail => _latest is null ? "" : $"{_latest.Sessions.Count} live session{(_latest.Sessions.Count == 1 ? "" : "s")}";
+    public double[] CpuPoints => _cpuPoints;
+    public double[] AgentPoints => _agentPoints;
+    public string CpuRange => Range(_cpuPoints, v => Format.Percent(v));
+    public string AgentRange => Range(_agentPoints, v => Format.Bytes((long)v));
+
+    private static string Range(double[] points, Func<double, string> format) => points.Length == 0
+        ? "No readings yet."
+        : $"Last {points.Length} readings: low {format(points.Min())}, high {format(points.Max())}.";
+
+    public bool HasLeftovers => _latest is { Orphans.Count: > 0 };
+    public bool IsAllClear => _latest is { Orphans.Count: 0 };
+    public bool HasSafeLeftovers => _safeLeftovers > 0;
+    public bool HasOnlyUnsafeLeftovers => HasLeftovers && _safeLeftovers == 0;
+    public string Leftovers => _latest is null ? "–" : _latest.Orphans.Count == 0 ? "All clear" : Format.Bytes(_latest.OrphanPrivateBytes);
+    public string LeftoversDetail => _latest is null ? ""
+        : _latest.Orphans.Count switch { 0 => "Nothing left behind", 1 => "1 leftover", var n => $"{n} leftovers" };
+
+    public string ReclaimedTotal => _tally.Stops == 0 ? "Nothing yet" : Format.Bytes(_tally.TotalBytes);
+    public string ReclaimedDetail => _tally.Stops == 0
+        ? "What you free adds up here."
+        : $"over {_tally.Stops} cleanup{(_tally.Stops == 1 ? "" : "s")}";
+    public int CleanDays => _tally.CleanDays(DateOnly.FromDateTime(DateTime.Now));
+    public string CleanDaysText => CleanDays switch { 0 => "", 1 => "1 day leftover-free", var n => $"{n} days leftover-free" };
+    public bool HasCleanDays => CleanDays > 0;
+
+    public MascotMood Mood => _proud ? MascotMood.Proud : Personality.Mood(MemoryFraction, _latest?.Orphans.Count ?? 0);
+    public string Greeting => Personality.Greeting(DateTime.Now.Hour);
+    public string MoodLine => _latest is null ? "Having a first look…" : Personality.StatusLine(MemoryFraction, _latest.Orphans.Count);
+    public int Beat => _beat;
 
     public string OrphansHeader => $"Leftovers ({Orphans.Count})";
     public string SessionsHeader => $"Sessions ({Sessions.Count})";
@@ -213,16 +277,45 @@ public sealed class MainViewModel : ObservableObject
     public string ProjectsHeader => $"Projects ({Projects.Count})";
 
     public bool HasNoOrphans => Orphans.Count == 0;
+    public bool HasNoSessions => Sessions.Count == 0;
     public bool HasNoFindings => Findings.Count == 0;
     public bool HasNoProjects => Projects.Count == 0;
 
     /// <summary>The last poll's projects (for tying containers to them).</summary>
     public IReadOnlyList<ProjectSummary> LatestProjects { get; private set; } = [];
 
+    /// <summary>Every poll, window open or not, so the sparklines are ready when it opens. Cheap: two numbers in a small ring.</summary>
+    public void Record(AnalysisResult result)
+    {
+        _cpuHistory.Add(result.Snapshot.System.CpuPercent);
+        _agentHistory.Add(result.AgentPrivateBytes);
+    }
+
+    public void SetTally(ReclaimTally tally)
+    {
+        _tally = tally;
+        Raise(nameof(ReclaimedTotal));
+        Raise(nameof(ReclaimedDetail));
+        Raise(nameof(CleanDays));
+        Raise(nameof(CleanDaysText));
+        Raise(nameof(HasCleanDays));
+    }
+
+    /// <summary>The mascot looks pleased for a moment after something was freed.</summary>
+    public void SetProud(bool proud)
+    {
+        _proud = proud;
+        Raise(nameof(Mood));
+    }
+
     public void Update(MonitorUpdate update)
     {
         var result = update.Result;
         _latest = result;
+        _safeLeftovers = update.SafeLeftovers.Count;
+        _cpuPoints = _cpuHistory.ToArray();
+        _agentPoints = _agentHistory.ToArray();
+        _beat++;
         LatestProjects = update.Projects;
 
         CollectionSync.Sync(Ports, update.Ports, p => (p.Port, p.Process.Key), r => (r.Model.Port, r.Model.Process.Key),
@@ -234,7 +327,15 @@ public sealed class MainViewModel : ObservableObject
             o => new OrphanRow(o), (row, o) => row.Update(o));
         CollectionSync.Sync(Sessions, result.Sessions, s => s.Root.Process.Key, r => r.Model.Root.Process.Key,
             s => new SessionRow(s), (row, s) => row.Update(s));
-        foreach (var row in Sessions) row.SetStuck(result.Stuck);
+        foreach (var row in Sessions)
+        {
+            row.SetStuck(result.Stuck);
+            row.Beat = _beat;
+        }
+        var largestOrphan = Math.Max(1, Orphans.Select(o => o.MemoryBytes).DefaultIfEmpty().Max());
+        foreach (var row in Orphans) row.MemoryShare = row.MemoryBytes / (double)largestOrphan;
+        var largestProject = Math.Max(1, Projects.Select(p => p.MemoryBytes).DefaultIfEmpty().Max());
+        foreach (var row in Projects) row.MemoryShare = row.MemoryBytes / (double)largestProject;
         CollectionSync.Sync(Findings, result.Findings, f => f.Title, r => r.Model.Title,
             f => new FindingRow(f), (row, f) => row.Update(f));
 

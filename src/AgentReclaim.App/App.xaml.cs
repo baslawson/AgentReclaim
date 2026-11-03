@@ -25,6 +25,8 @@ public partial class App : Application
     private readonly CancellationTokenSource _pipeStop = new();
     private AppSettings _published = new();
     private MonitorUpdate? _latest;
+    private ReclaimTally _tally = new();
+    private ActionLog? _log;
 
     public static bool IsExiting { get; private set; }
 
@@ -60,6 +62,8 @@ public partial class App : Application
         var logTail = new ActionLogTail(AppPaths.ActionLogFile);
         var terminator = new ProcessTerminator(log);
         var viewModel = new MainViewModel();
+        _log = log;
+        _tally = ReclaimTally.Load(AppPaths.ReclaimTallyFile);
         foreach (var entry in log.ReadRecent(100).Where(x => x.Phase == "done").Reverse())
             viewModel.AddActivity(entry.Message, entry, entry.TimeUtc);
 
@@ -86,12 +90,24 @@ public partial class App : Application
             () => RunHealthChecks(fromTray: true));
         _window.HealthChecksRequested += () => RunHealthChecks(fromTray: false);
 
+        _window.FreeSafeRequested += FreeSafeLeftovers;
+        RefreshReclaimed();
+
         _window.ActionCompleted += result =>
-            _tray.ShowMessage(result.Success ? "Freed resources" : "Couldn't stop process", result.Message, !result.Success);
+        {
+            _tray.ShowMessage(result.Success ? "Nice and tidy" : "Couldn't stop process", result.Message, !result.Success);
+            ReclaimedSomething(result.Entry);
+        };
 
         _monitor.Updated += update => Dispatcher.BeginInvoke(() =>
         {
             _latest = update;
+            viewModel.Record(update.Result);
+            if (_tally.NoteDay(DateOnly.FromDateTime(DateTime.Now), update.Result.Orphans.Count > 0))
+            {
+                _tally.Save(AppPaths.ReclaimTallyFile);
+                viewModel.SetTally(_tally);
+            }
             if (_window?.IsVisible == true) viewModel.Update(update); // nobody's looking otherwise
             _tray.Update(update.Result, update.SafeLeftovers);
         });
@@ -125,6 +141,7 @@ public partial class App : Application
         _monitor.AutoAction += action => Dispatcher.BeginInvoke(() =>
         {
             viewModel.AddActivity(action.Message, action.Entry, action.Entry?.TimeUtc);
+            ReclaimedSomething(action.Entry);
             if (action.Notify)
                 _tray.ShowMessage(action.Success ? "AgentReclaim" : "AgentReclaim: action failed", action.Message, !action.Success);
         });
@@ -159,6 +176,24 @@ public partial class App : Application
             // The supervisor runs from the .old exe; remove it once that has exited.
             _ = Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith(_ => UpdateInstaller.CleanUpAfterUpdate(), TaskScheduler.Default);
         }
+    }
+
+    /// <summary>Brings the lifetime total up to date from the action log.</summary>
+    private void RefreshReclaimed()
+    {
+        if (_log is null || _viewModel is null) return;
+        if (_tally.Count(_log.ReadRecent(5000))) _tally.Save(AppPaths.ReclaimTallyFile);
+        _viewModel.SetTally(_tally);
+    }
+
+    /// <summary>After any stop, by anyone: adds it to the total, and if it's good news, a small celebration.</summary>
+    private void ReclaimedSomething(ActionLogEntry? entry)
+    {
+        if (entry is null) return;
+        RefreshReclaimed();
+        if (!Personality.ShouldCelebrate(entry)) return;
+        _tray?.Wiggle();
+        _window?.Celebrate(entry.FreedBytes);
     }
 
     private static void WaitForPreviousInstance(string[] args)

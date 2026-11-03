@@ -1,16 +1,17 @@
 <Application x:Class="AgentReclaim.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:AgentReclaim.App"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
-        <!-- Light-theme defaults; ThemeManager replaces these for dark mode. -->
-        <SolidColorBrush x:Key="Accent" Color="#D9772B" />
-        <SolidColorBrush x:Key="Muted" Color="#6B6B6B" />
-        <SolidColorBrush x:Key="Card" Color="#F6F5F3" />
-        <SolidColorBrush x:Key="CardBorder" Color="#E4E1DC" />
+        <!-- Light-theme defaults; ThemeManager replaces every colour for the active theme. -->
+        <SolidColorBrush x:Key="Accent" Color="#A34808" />
+        <SolidColorBrush x:Key="Muted" Color="#655F56" />
+        <SolidColorBrush x:Key="Card" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="CardBorder" Color="#E6DFD4" />
 
         <Style x:Key="StatValue" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="20" />
+            <Setter Property="FontSize" Value="22" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style x:Key="StatLabel" TargetType="TextBlock">
@@ -21,9 +22,196 @@
             <Setter Property="Background" Value="{DynamicResource Card}" />
             <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="CornerRadius" Value="10" />
             <Setter Property="Padding" Value="14,10" />
             <Setter Property="Margin" Value="0,0,10,0" />
         </Style>
+        <Style x:Key="SettingsCard" TargetType="Border" BasedOn="{StaticResource StatCard}">
+            <Setter Property="Padding" Value="18,14" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+
+        <!-- The main action in a card. Stop… and other serious buttons stay ordinary on purpose. -->
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
+            <Setter Property="Background" Value="{DynamicResource Accent}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.88" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.75" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- A list row with a clear selection in the app's own colour. -->
+        <Style x:Key="ListRow" TargetType="ListBoxItem">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Grid Margin="0,0,0,4">
+                            <Border x:Name="Chrome" CornerRadius="8" Background="{DynamicResource Card}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" Padding="10,6">
+                                <ContentPresenter />
+                            </Border>
+                            <Border x:Name="Marker" Width="3" Margin="1,10" CornerRadius="1.5" HorizontalAlignment="Left" Background="{DynamicResource Accent}" Visibility="Collapsed" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource HoverFill}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SelectionFill}" />
+                                <Setter TargetName="Marker" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Settings: a switch, still a CheckBox underneath, so keyboard and screen readers treat it as a toggle. -->
+        <Style x:Key="ToggleSwitch" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Background="Transparent">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="Track" Width="36" Height="20" CornerRadius="10" BorderThickness="1" VerticalAlignment="Center"
+                                    BorderBrush="{DynamicResource Muted}" Background="Transparent">
+                                <Ellipse x:Name="Knob" Width="12" Height="12" HorizontalAlignment="Left" Margin="3,0,0,0" Fill="{DynamicResource Muted}">
+                                    <Ellipse.RenderTransform>
+                                        <TranslateTransform x:Name="KnobMove" />
+                                    </Ellipse.RenderTransform>
+                                </Ellipse>
+                            </Border>
+                            <ContentPresenter Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource Accent}" />
+                                <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                                <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource OnAccent}" />
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="KnobMove" Storyboard.TargetProperty="X" To="16" Duration="{x:Static local:Motion.Fast}" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="KnobMove" Storyboard.TargetProperty="X" To="0" Duration="{x:Static local:Motion.Fast}" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Tables: quiet headers, no cell boxes, a soft hover, and a selection in the app's colour. -->
+        <Style x:Key="GridHeader" TargetType="DataGridColumnHeader">
+            <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridColumnHeader">
+                        <Grid Background="Transparent">
+                            <Border BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,0,0,1" Padding="8,8">
+                                <StackPanel Orientation="Horizontal">
+                                    <ContentPresenter VerticalAlignment="Center" />
+                                    <TextBlock x:Name="Sort" Margin="4,0,0,0" FontSize="10" VerticalAlignment="Center" Visibility="Collapsed" />
+                                </StackPanel>
+                            </Border>
+                            <Thumb x:Name="PART_LeftHeaderGripper" HorizontalAlignment="Left" Width="6" Cursor="SizeWE" Opacity="0" />
+                            <Thumb x:Name="PART_RightHeaderGripper" HorizontalAlignment="Right" Width="6" Cursor="SizeWE" Opacity="0" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+                            </Trigger>
+                            <Trigger Property="SortDirection" Value="Ascending">
+                                <Setter TargetName="Sort" Property="Text" Value="▲" />
+                                <Setter TargetName="Sort" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="SortDirection" Value="Descending">
+                                <Setter TargetName="Sort" Property="Text" Value="▼" />
+                                <Setter TargetName="Sort" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="GridRow" TargetType="DataGridRow">
+            <Setter Property="Background" Value="Transparent" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource HoverFill}" />
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource SelectionFill}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="GridCell" TargetType="DataGridCell">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridCell">
+                        <Border Background="Transparent" Padding="8,6">
+                            <ContentPresenter VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- A number with a thin bar under it. -->
+        <DataTemplate x:Key="MemoryCell">
+            <StackPanel MinWidth="56">
+                <TextBlock Text="{Binding Memory}" />
+                <local:MiniBar Value="{Binding MemoryShare}" Margin="0,3,0,0" />
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="CpuCell">
+            <StackPanel MinWidth="48">
+                <TextBlock Text="{Binding Cpu}" />
+                <local:MiniBar Value="{Binding CpuShare}" Margin="0,3,0,0" />
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="AgentCell">
+            <local:AgentBadge Agent="{Binding Agent}" />
+        </DataTemplate>
     </Application.Resources>
 </Application>

@@ -7,6 +7,7 @@ namespace AgentReclaim.Core.Tests;
 /// An update failed with "access denied" deleting AgentReclaim.exe.old, because an agent's MCP server was still running
 /// from it. These run a real exe, since only a running image behaves like that: it can't be deleted but can be renamed.
 /// </summary>
+[Collection("Global path overrides")] // moving a file aside writes to the shared log
 public class UpdateLockedOldExeTests : IDisposable
 {
     private readonly string _dir = Directory.CreateTempSubdirectory("old-exe-").FullName;
