@@ -92,9 +92,18 @@ public partial class App : Application
         _monitor.Updated += update => Dispatcher.BeginInvoke(() =>
         {
             _latest = update;
-            viewModel.Update(update);
+            if (_window?.IsVisible == true) viewModel.Update(update); // nobody's looking otherwise
             _tray.Update(update.Result, update.SafeLeftovers);
         });
+        _window.IsVisibleChanged += (_, e) =>
+        {
+            var visible = (bool)e.NewValue;
+            _monitor.WindowVisible = visible;
+            if (!visible) return;
+            if (_latest is { } latest) viewModel.Update(latest); // what's known now, while the fresh poll runs
+            _monitor.RefreshNow();
+        };
+        _monitor.WindowVisible = _window.IsVisible;
         _monitor.MemoryLow += alert => Dispatcher.BeginInvoke(() => Slowdown(alert.Title, alert.Text));
         _monitor.CpuBusy += alert => Dispatcher.BeginInvoke(() => Slowdown(alert.Title, alert.Text));
         _monitor.LeftoverAppeared += notice => Dispatcher.BeginInvoke(() =>

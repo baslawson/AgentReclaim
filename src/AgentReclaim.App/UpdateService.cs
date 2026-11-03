@@ -40,7 +40,7 @@ public sealed class UpdateService(Func<AppSettings> settings, Action<DateTime> r
                 {
                     Log.Error("Scheduled update check failed", ex);
                 }
-                await Task.Delay(TimeSpan.FromHours(1), _stop.Token);
+                await Task.Delay(UpdateSchedule.NextWait(settings().LastUpdateCheckUtc, DateTime.UtcNow), _stop.Token);
             }
         }
         catch (OperationCanceledException)
@@ -51,7 +51,7 @@ public sealed class UpdateService(Func<AppSettings> settings, Action<DateTime> r
     private async Task ScheduledCheckAsync()
     {
         var s = settings();
-        if (s.UpdateMode == UpdateMode.Off || (s.LastUpdateCheckUtc is { } last && DateTime.UtcNow - last <= TimeSpan.FromHours(24))) return;
+        if (s.UpdateMode == UpdateMode.Off || !UpdateSchedule.IsDue(s.LastUpdateCheckUtc, DateTime.UtcNow)) return;
 
         var update = await CheckAsync(manual: false);
         if (update is null || settings().UpdateMode != UpdateMode.AutoInstall) return;

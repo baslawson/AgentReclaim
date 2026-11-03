@@ -13,6 +13,19 @@ public sealed record LeftoverNotice(string Title, string Text, IReadOnlyList<Orp
 /// </summary>
 public sealed class LeftoverWatch
 {
+    /// <summary>
+    /// Small tools from a shell pipeline: gone soon or harmless either way, and about half of all notices in real use.
+    /// They're still listed as leftovers and handled by the auto rules; they just don't interrupt anyone.
+    /// </summary>
+    private static readonly HashSet<string> TrivialTools = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "conhost.exe", "sleep.exe", "timeout.exe", "tail.exe", "head.exe", "cut.exe", "cat.exe", "grep.exe", "sed.exe",
+        "awk.exe", "gawk.exe", "sort.exe", "uniq.exe", "tr.exe", "wc.exe", "tee.exe", "find.exe", "xargs.exe", "less.exe", "more.com",
+    };
+
+    private static bool WorthANotice(OrphanTree tree) =>
+        tree.Root.SelfAndDescendants().Any(x => !TrivialTools.Contains(x.Node.Process.Name) || x.Node.Process.ListeningPorts.Count > 0);
+
     private HashSet<ProcessKey>? _known;
     private HashSet<ProcessKey> _pending = new();
 
@@ -37,7 +50,7 @@ public sealed class LeftoverWatch
             if (_pending.Contains(key))
             {
                 _known.Add(key);
-                fresh.Add(tree);
+                if (WorthANotice(tree)) fresh.Add(tree);
             }
             else
             {

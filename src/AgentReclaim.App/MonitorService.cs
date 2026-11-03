@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using AgentReclaim.Core.Actions;
 using AgentReclaim.Core.Analysis;
 using AgentReclaim.Core.Cleanup;
@@ -45,8 +46,17 @@ public sealed class MonitorService(
     private int _batchStops;
     private long _batchFreed;
     private int _batchSkipped;
+    private readonly PollLog _pollLog = new();
+    private TimeSpan _nextWait = PollSchedule.Normal;
+    private volatile bool _windowVisible;
 
-    public TimeSpan Interval { get; set; } = TimeSpan.FromSeconds(3);
+    /// <summary>The window is open. While it's closed, only what the tray and the rules need is worked out.</summary>
+    public bool WindowVisible
+    {
+        get => _windowVisible;
+        set => _windowVisible = value;
+    }
+
     /// <summary>Pausing also drops any "Free safe leftovers" still queued: they were confirmed for now, not for later.</summary>
     public bool Paused
     {
@@ -138,7 +148,7 @@ public sealed class MonitorService(
 
             try
             {
-                await Task.WhenAny(Task.Delay(Interval, token), _wake.WaitAsync(token));
+                await Task.WhenAny(Task.Delay(_nextWait, token), _wake.WaitAsync(token));
             }
             catch (OperationCanceledException)
             {
@@ -149,6 +159,7 @@ public sealed class MonitorService(
 
     private void Poll()
     {
+        var started = Stopwatch.GetTimestamp();
         var current = settings();
         var selfPid = Environment.ProcessId;
         analyzer.Options = analyzer.Options with
@@ -163,10 +174,13 @@ public sealed class MonitorService(
             rules.MarkSessionEnded(new ProcessKey(ended.AgentPid, ended.AgentStartTicks), DateTime.UtcNow);
 
         var result = analyzer.Analyze(collector.Collect());
+        _nextWait = PollSchedule.Next(WindowVisible, result, !_freeRequested.IsEmpty);
         _projects.Retain(result.Snapshot.Processes.Select(p => p.Key));
         var projects = Insights.Projects(result, _projects.ProjectOf);
         var safe = rules.SafeLeftovers(result, current, selfPid);
-        Updated?.Invoke(new MonitorUpdate(result, Insights.Ports(result, _projects.ProjectOf), projects, safe));
+        // Ports are only shown in the window, and opening it asks for a fresh poll.
+        var ports = WindowVisible ? Insights.Ports(result, _projects.ProjectOf) : [];
+        Updated?.Invoke(new MonitorUpdate(result, ports, projects, safe));
 
         // Stops an agent made through MCP (a separate process) show up live.
         foreach (var entry in actionLogTail?.ReadNew() ?? [])
@@ -218,6 +232,20 @@ public sealed class MonitorService(
         // At most one stop per fresh snapshot: a stop can take seconds, and anything planned from this
         // snapshot after it would be acting on stale information. The next poll re-plans.
         var stuckToStop = rules.StuckToStop(result, current, selfPid);
+        var candidates = rules.LeftoversToStop(result, current, selfPid);
+        if (rules.TakeBurstNotice() is { } burst)
+        {
+            var message = $"{burst} leftovers appeared at once, so they won't be stopped automatically. Check them on the Leftovers tab.";
+            Log.Warning(message);
+            AutoAction?.Invoke(new AutoActionEvent(true, message, null)); // nothing failed: "action failed" would mislead
+        }
+        foreach (var skipped in rules.TakeSkipNotes()) Log.Info(skipped);
+
+        var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        if (_pollLog.Note(result.Snapshot.TakenAtUtc, result.Snapshot.Processes.Count, result.Sessions.Count, result.Orphans.Count,
+                candidates.Count, elapsed, () => result.Snapshot.Processes.FirstOrDefault(p => p.Pid == selfPid)?.PrivateBytes) is { } line)
+            Log.Write(line.Level, line.Text, null);
+
         if (stuckToStop.Count > 0 && !Paused)
         {
             var stuck = stuckToStop[0];
@@ -239,14 +267,6 @@ public sealed class MonitorService(
             return;
         }
 
-        var candidates = rules.LeftoversToStop(result, current, selfPid);
-        if (rules.TakeBurstNotice() is { } burst)
-        {
-            var message = $"{burst} leftovers appeared at once, so they won't be stopped automatically. Check them on the Leftovers tab.";
-            Log.Warning(message);
-            AutoAction?.Invoke(new AutoActionEvent(true, message, null)); // nothing failed: "action failed" would mislead
-        }
-        Log.Debug($"Poll: {result.Snapshot.Processes.Count} processes, {result.Sessions.Count} sessions, {result.Orphans.Count} leftovers, {candidates.Count} auto-stop candidate(s).");
         if (candidates.Count > 0 && !Paused && settings().AutoStopLeftovers)
         {
             var tree = candidates[0];

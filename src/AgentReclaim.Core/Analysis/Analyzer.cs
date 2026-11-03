@@ -336,7 +336,8 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
             {
                 foreach (var node in nodes)
                 {
-                    if (_busy.TryGetValue(node.Process.Key, out var busy) && busy.LastHigh == now && now - busy.Since >= spinAfter)
+                    if (_busy.TryGetValue(node.Process.Key, out var busy) && busy.LastHigh == now && now - busy.Since >= spinAfter
+                        && !ExemptFromSpinning(session, node, now))
                         stuck.Add(new StuckProcess(session, node, StuckKind.Spinning, now - busy.Since));
                 }
             }
@@ -377,6 +378,28 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
         foreach (var key in _toolActivity.Keys.Where(k => !tracked.Contains(k)).ToList())
             _toolActivity.Remove(key);
         return stuck;
+    }
+
+    /// <summary>
+    /// Busy inside a command that's limited itself or that isn't ours to judge, by the same rules as waiting. An agent
+    /// itself is always reported (and never stopped, whatever this says).
+    /// </summary>
+    private static bool ExemptFromSpinning(AgentSession session, ProcessNode node, DateTime now)
+    {
+        if (AgentSignatures.AgentRootKind(node.Process) is not null) return false;
+        if (!FindTool(session.Root, node, null, out var tool) || tool is null) return false;
+        return StuckExemptions.Reason(tool.Process, tool.SelfAndDescendants().Select(x => x.Node).ToList(), now) is not null;
+    }
+
+    /// <summary>Finds the command the nearest agent above <paramref name="target"/> started, which may be the target itself.</summary>
+    private static bool FindTool(ProcessNode at, ProcessNode target, ProcessNode? tool, out ProcessNode? found)
+    {
+        found = tool;
+        if (at == target) return true;
+        var isAgent = AgentSignatures.AgentRootKind(at.Process) is not null;
+        foreach (var child in at.Children)
+            if (FindTool(child, target, isAgent ? child : tool, out found)) return true;
+        return false;
     }
 
     private static Finding Describe(StuckProcess s)

@@ -30,6 +30,9 @@ public sealed class AutoRuleEngine
     private HashSet<ProcessKey> _knownLeftovers = [];
     private readonly HashSet<ProcessKey> _burst = [];
     private int _unreportedBurst;
+    private readonly HashSet<(ProcessKey Key, string Reason)> _skipsNoted = [];
+    private readonly List<string> _newSkips = [];
+    private bool _noNetworkNoted;
 
     /// <summary>
     /// This many new leftovers in one poll is left to a person. Normal use has shown at most 6 at any time, while the
@@ -54,9 +57,39 @@ public sealed class AutoRuleEngine
     {
         NoteBurst(result);
         if (!settings.AutoStopLeftovers) return [];
-        return SafeLeftovers(result, settings, selfPid, skipAttempted: true)
-            .Where(tree => !tree.Root.SelfAndDescendants().Any(x => _burst.Contains(x.Node.Process.Key)))
-            .ToList();
+        var plan = new List<OrphanTree>();
+        foreach (var tree in SafeLeftovers(result, settings, selfPid, skipAttempted: true))
+        {
+            if (tree.Root.SelfAndDescendants().Any(x => _burst.Contains(x.Node.Process.Key)))
+                NoteSkip(tree.Root.Process, "it appeared together with many others");
+            else
+                plan.Add(tree);
+        }
+        return plan;
+    }
+
+    /// <summary>
+    /// Why automatic stops were held back, once per process and reason, since the last time this was asked. Waiting for
+    /// a time to pass isn't listed: that's the rule working, not something holding it back.
+    /// </summary>
+    public IReadOnlyList<string> TakeSkipNotes()
+    {
+        if (_newSkips.Count == 0) return [];
+        var notes = _newSkips.ToList();
+        _newSkips.Clear();
+        return notes;
+    }
+
+    private void NoteSkip(ProcessInfo process, string reason)
+    {
+        if (_skipsNoted.Add((process.Key, reason)))
+            _newSkips.Add($"Auto-stop skipped {process.Name} (pid {process.Pid}): {reason}.");
+    }
+
+    private void NoteNetwork(bool complete)
+    {
+        if (!complete && !_noNetworkNoted) _newSkips.Add("Auto-stop paused: connection data can't be read.");
+        _noNetworkNoted = !complete;
     }
 
     /// <summary>
@@ -96,6 +129,7 @@ public sealed class AutoRuleEngine
     public IReadOnlyList<OrphanTree> SafeLeftovers(AnalysisResult result, AppSettings settings, int selfPid, bool skipAttempted = false)
     {
         // Without connection data we can't tell a leftover from a server someone is using.
+        if (skipAttempted) NoteNetwork(result.Snapshot.NetworkComplete);
         if (!result.Snapshot.NetworkComplete) return [];
 
         var now = result.Snapshot.TakenAtUtc;
@@ -105,14 +139,26 @@ public sealed class AutoRuleEngine
         foreach (var tree in result.Orphans)
         {
             // Only leftovers we actually saw under an agent. Guessed owners always need a human.
-            if (tree.Attribution != Attribution.Observed) continue;
+            if (tree.Attribution != Attribution.Observed)
+            {
+                if (skipAttempted) NoteSkip(tree.Root.Process, "its owner is only a guess");
+                continue;
+            }
             if (skipAttempted && _attemptedStops.Contains(tree.Root.Process.Key)) continue;
 
             var nodes = tree.Root.SelfAndDescendants().Select(x => x.Node).ToList();
-            if (nodes.Sum(n => n.Process.EstablishedConnections) > 0) continue; // something is talking to it
+            if (nodes.Sum(n => n.Process.EstablishedConnections) > 0) // something is talking to it
+            {
+                if (skipAttempted) NoteSkip(tree.Root.Process, "it has open connections");
+                continue;
+            }
 
             var check = SafetyPolicy.Check(tree, selfPid);
-            if (!check.Allowed) continue;
+            if (!check.Allowed)
+            {
+                if (skipAttempted) NoteSkip(tree.Root.Process, check.BlockedReason ?? "the safety checks refused it");
+                continue;
+            }
 
             // After a hook-reported session end, the grace period must have passed since that end
             // (and the tree been idle that long); otherwise the normal idle threshold applies.
@@ -150,15 +196,35 @@ public sealed class AutoRuleEngine
     public IReadOnlyList<StuckProcess> StuckToStop(AnalysisResult result, AppSettings settings, int selfPid)
     {
         if (!settings.AutoStopStuckWaiting && !settings.AutoStopStuckSpinning) return [];
+        NoteNetwork(result.Snapshot.NetworkComplete);
         if (!result.Snapshot.NetworkComplete) return []; // can't tell whether something is still talking to it
 
-        return result.Stuck
-            .Where(s => s.Kind == StuckKind.Waiting ? settings.AutoStopStuckWaiting : settings.AutoStopStuckSpinning)
-            .Where(s => !_attemptedStops.Contains(s.Node.Process.Key))
-            .Where(s => s.Node.SelfAndDescendants().All(x => x.Node.Process.EstablishedConnections == 0
-                && x.Node.Process.ListeningPorts.Count == 0 && x.Node.Process.UdpPorts.Count == 0))
-            .Where(s => SafetyPolicy.CheckSubtree(s.Node, selfPid, requireKnownNodes: true).Allowed)
-            .ToList();
+        var plan = new List<StuckProcess>();
+        foreach (var stuck in result.Stuck)
+        {
+            if (!(stuck.Kind == StuckKind.Waiting ? settings.AutoStopStuckWaiting : settings.AutoStopStuckSpinning)) continue;
+            if (_attemptedStops.Contains(stuck.Node.Process.Key)) continue;
+
+            var nodes = stuck.Node.SelfAndDescendants().Select(x => x.Node.Process).ToList();
+            if (nodes.Any(p => p.EstablishedConnections > 0))
+            {
+                NoteSkip(stuck.Node.Process, "it has open connections");
+                continue;
+            }
+            if (nodes.Any(p => p.ListeningPorts.Count > 0 || p.UdpPorts.Count > 0))
+            {
+                NoteSkip(stuck.Node.Process, "it's using a port");
+                continue;
+            }
+            var check = SafetyPolicy.CheckSubtree(stuck.Node, selfPid, requireKnownNodes: true);
+            if (!check.Allowed)
+            {
+                NoteSkip(stuck.Node.Process, check.BlockedReason ?? "the safety checks refused it");
+                continue;
+            }
+            plan.Add(stuck);
+        }
+        return plan;
     }
 
     public void RecordStopAttempt(StuckProcess stuck) => _attemptedStops.Add(stuck.Node.Process.Key);
@@ -201,6 +267,7 @@ public sealed class AutoRuleEngine
         _throttled.RemoveWhere(k => !alive.Contains(k));
         var running = result.Snapshot.Processes.Select(p => p.Key).ToHashSet();
         _attemptedStops.RemoveWhere(k => !running.Contains(k));
+        _skipsNoted.RemoveWhere(s => !running.Contains(s.Key));
         return plan;
     }
 

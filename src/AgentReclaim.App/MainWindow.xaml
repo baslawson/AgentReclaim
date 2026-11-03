@@ -693,7 +693,7 @@
                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="Diagnostics" Margin="0,20,0,0" />
                         <CheckBox Content="Debug logging" IsChecked="{Binding DebugLogging}" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
-                                   Text="Logs every poll and decision, not just actions and errors. Logs stay on this PC (7 days, 10 MB a day). Debug logs include command lines, which can contain secrets passed as arguments: check before sharing one." />
+                                   Text="Logs polls when something changes and decisions, not just actions and errors. Logs stay on this PC (7 days, 10 MB a day). Debug logs include command lines, which can contain secrets passed as arguments: check before sharing one." />
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                             <Button Content="Open logs folder" Padding="10,3" Margin="0,0,8,0" Click="OpenLogs_Click" />
                             <Button Content="Copy diagnostics" Padding="10,3" Click="CopyDiagnostics_Click" />
