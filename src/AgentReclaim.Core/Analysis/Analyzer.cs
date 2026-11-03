@@ -1,3 +1,4 @@
+using AgentReclaim.Core.Diagnostics;
 using AgentReclaim.Core.Model;
 
 namespace AgentReclaim.Core.Analysis;
@@ -56,6 +57,13 @@ public sealed record AnalyzerOptions
     /// them start an agent session.
     /// </summary>
     public Func<int, bool> IsHealthCheck { get; init; } = Integration.AgentDoctor.IsHealthCheckProcess;
+
+    /// <summary>
+    /// A gap between snapshots at least this long (the PC slept, or monitoring was paused) isn't counted towards any
+    /// idle, busy or leftover time: nothing was observed, and nothing could use CPU during a sleep. Null: every gap
+    /// counts, for callers that poll at uneven intervals.
+    /// </summary>
+    public TimeSpan? UnobservedGapAfter { get; init; }
 }
 
 /// <summary>
@@ -70,6 +78,8 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
     private readonly Dictionary<ProcessKey, (DateTime Since, DateTime LastHigh)> _busy = new(); // a whole core busy since
     // A tool's whole tree: last seen active (a member busy, or one starting or exiting) and who was in it.
     private readonly Dictionary<ProcessKey, (DateTime LastActive, string Members)> _toolActivity = new();
+    private readonly Dictionary<ProcessKey, DateTime> _leftoverSince = new(); // first seen with no live agent above it
+    private DateTime? _lastSnapshot;
 
     /// <summary>Swapped in when the user changes settings; only read on the polling thread.</summary>
     public AnalyzerOptions Options
@@ -81,6 +91,7 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
     public AnalysisResult Analyze(ProcessSnapshot snapshot)
     {
         var now = snapshot.TakenAtUtc;
+        DiscountUnobservedTime(now);
         var byPid = new Dictionary<int, ProcessInfo>();
         foreach (var p in snapshot.Processes) byPid[p.Pid] = p;
 
@@ -205,17 +216,24 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
             .ToList();
 
         var orphans = new List<OrphanTree>();
+        var leftovers = new HashSet<ProcessKey>();
         foreach (var p in snapshot.Processes)
         {
             if (OrphanInfo(p) is not { } info) continue;
+            leftovers.Add(p.Key);
+            _leftoverSince.TryAdd(p.Key, now);
             if (ParentOf(p) is { } parent && OrphanInfo(parent) is not null) continue; // not the top of its tree
+            var leftoverFor = now - _leftoverSince[p.Key];
             orphans.Add(info.Guessed
-                ? new OrphanTree(Build(p), info.Kind, Attribution.Heuristic, info.OwnerName)
+                ? new OrphanTree(Build(p), info.Kind, Attribution.Heuristic, info.OwnerName) { LeftoverFor = leftoverFor }
                 : new OrphanTree(Build(p), info.Kind, Attribution.Observed, $"{info.OwnerName} (pid {info.OwnerPid})", info.OwnerPid, info.OwnerStartTicks)
                 {
                     Agents = info.AgentKeys,
+                    LeftoverFor = leftoverFor,
                 });
         }
+        foreach (var key in _leftoverSince.Keys.Where(k => !leftovers.Contains(k)).ToList())
+            _leftoverSince.Remove(key);
         orphans.Sort((a, b) => b.Root.TotalPrivateBytes.CompareTo(a.Root.TotalPrivateBytes));
 
         // Never prune from an empty snapshot: it means collection failed, not that everything exited.
@@ -352,7 +370,7 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
                     || p.StartTimeUtc - agent.Process.StartTimeUtc < _options.AgentStartupGrace) continue;
                 if (tree.Any(n => n.Process.ListeningPorts.Count > 0 || n.Process.UdpPorts.Count > 0)) continue; // a server: idle between requests by design
                 var idle = now - active;
-                if (idle >= waitAfter && stuck.All(s => s.Node != tool))
+                if (idle >= waitAfter && stuck.All(s => s.Node != tool) && StuckExemptions.Reason(p, tree, now) is null)
                     stuck.Add(new StuckProcess(session, tool, StuckKind.Waiting, idle));
             }
         }
@@ -375,6 +393,26 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
                 "Stop… on the Sessions tab ends it (an agent itself is never stopped by AgentReclaim).",
                 s.Node.TotalPrivateBytes, FindingKind.Stuck);
     }
+
+    /// <summary>Moves every clock forward over a gap in which nothing was observed, so it doesn't count as idle or busy.</summary>
+    private void DiscountUnobservedTime(DateTime now)
+    {
+        var last = _lastSnapshot;
+        _lastSnapshot = now;
+        if (last is null || _options.UnobservedGapAfter is not { } limit || now - last.Value < limit) return;
+
+        var gap = now - last.Value;
+        foreach (var (key, state) in _activity.ToList())
+            _activity[key] = (state.FirstSeen + gap, state.LastActive + gap);
+        foreach (var (key, state) in _busy.ToList())
+            _busy[key] = (state.Since + gap, state.LastHigh + gap);
+        foreach (var (key, state) in _toolActivity.ToList())
+            _toolActivity[key] = (state.LastActive + gap, state.Members);
+        foreach (var (key, since) in _leftoverSince.ToList())
+            _leftoverSince[key] = since + gap;
+        Log.Info($"Nothing observed for {(int)gap.TotalMinutes} min (sleep or pause): not counted as idle time.");
+    }
+
     private bool IsActive(ProcessInfo p) =>
         p.CpuPercent >= Math.Min(_options.ActiveCpuPercent, _options.ActiveCorePercent / Math.Max(1, _options.CoreCount));
 

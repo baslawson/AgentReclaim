@@ -156,6 +156,7 @@ public sealed class MonitorService(
             DetectLeaks = current.LeakWarnings,
             StuckWaitingAfter = TimeSpan.FromMinutes(Math.Max(1, current.StuckWaitingMinutes)),
             StuckSpinningAfter = TimeSpan.FromMinutes(Math.Max(1, current.StuckSpinningMinutes)),
+            UnobservedGapAfter = TimeSpan.FromMinutes(1), // far longer than a poll: the PC slept, or monitoring was paused
         };
 
         while (_sessionEnds.TryDequeue(out var ended))
@@ -182,7 +183,7 @@ public sealed class MonitorService(
 
         if (_stuckWatch.Evaluate(result, current.NotifyStuck) is { } stuckNotice)
         {
-            Log.Info($"Possibly stuck: {stuckNotice.Text}");
+            Log.Info($"Possibly stuck: {stuckNotice.Text} [{stuckNotice.Processes}]");
             StuckFound?.Invoke(stuckNotice);
         }
 
@@ -239,6 +240,12 @@ public sealed class MonitorService(
         }
 
         var candidates = rules.LeftoversToStop(result, current, selfPid);
+        if (rules.TakeBurstNotice() is { } burst)
+        {
+            var message = $"{burst} leftovers appeared at once, so they won't be stopped automatically. Check them on the Leftovers tab.";
+            Log.Warning(message);
+            AutoAction?.Invoke(new AutoActionEvent(true, message, null)); // nothing failed: "action failed" would mislead
+        }
         Log.Debug($"Poll: {result.Snapshot.Processes.Count} processes, {result.Sessions.Count} sessions, {result.Orphans.Count} leftovers, {candidates.Count} auto-stop candidate(s).");
         if (candidates.Count > 0 && !Paused && settings().AutoStopLeftovers)
         {

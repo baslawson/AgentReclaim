@@ -53,6 +53,13 @@ public sealed record OrphanTree(ProcessNode Root, AgentKind Kind, Attribution At
 
     /// <summary>Every agent it was seen running under (just <see cref="Owner"/> unless agents were nested).</summary>
     public IReadOnlySet<ProcessKey> Agents { get; init; } = new HashSet<ProcessKey>();
+
+    /// <summary>
+    /// How long it's been seen with no live agent above it. Being idle says nothing about this: a child that sat idle
+    /// under its agent is idle the moment the agent exits. Only the analyzer tracks it; a tree built without one counts
+    /// as long since left over.
+    /// </summary>
+    public TimeSpan LeftoverFor { get; init; } = TimeSpan.MaxValue;
 }
 
 /// <summary>Something worth the user's attention that isn't a clean orphan, e.g. a pile of idle children.</summary>

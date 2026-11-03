@@ -37,6 +37,7 @@ public sealed class SessionMemoryCaps : IDisposable
     internal static bool Eligible(ProcessInfo p) =>
         !AgentSignatures.MightBeAgent(p)
         && !SafetyPolicy.IsProtected(p.Name)
+        && !SafetyPolicy.IsStartedByWindows(p)
         && !p.Name.Equals("conhost.exe", StringComparison.OrdinalIgnoreCase)
         && !(p.CommandLine is null && p.Name.Equals("node.exe", StringComparison.OrdinalIgnoreCase));
 

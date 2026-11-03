@@ -1,4 +1,5 @@
 using AgentReclaim.Core.Analysis;
+using AgentReclaim.Core.Model;
 
 namespace AgentReclaim.Core.Actions;
 
@@ -22,7 +23,39 @@ public static class SafetyPolicy
         "searchindexer.exe", "searchhost.exe", "msmpeng.exe", "nissrv.exe", "mpdefendercoreservice.exe", "securityhealthservice.exe",
         "audiodg.exe", "ctfmon.exe", "taskhostw.exe", "runtimebroker.exe", "vmcompute.exe", "startmenuexperiencehost.exe",
         "shellexperiencehost.exe", "textinputhost.exe", "lockapp.exe", "userinit.exe", "logonui.exe",
+        "backgroundtaskhost.exe", "applicationframehost.exe", "systemsettings.exe", "unsecapp.exe", "dataexchangehost.exe",
     };
+
+    /// <summary>Switches Windows starts a COM server or packaged app with. Nobody types these, and agents don't run them.</summary>
+    private static readonly string[] ActivationSwitchPrefixes = ["-servername:", "-comserver:"];
+    private static readonly HashSet<string> ActivationSwitches = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "-embedding", "/embedding", "-registerprocessascomserver", "-comserver",
+    };
+
+    /// <summary>
+    /// Started by Windows on its own schedule, not by whatever happens to look like its parent: a packaged system app
+    /// or a COM server. A wrong owner mustn't be enough to stop one (on 2026-10-28 one wrong owner stopped 25 of them,
+    /// including the search box, the lock screen and the Settings app). Judged by how it was started, since no list of
+    /// names keeps up with what Windows and the Store install. Agents' tools in System32 (cmd, conhost, curl) don't
+    /// match, so they can still be stopped.
+    /// </summary>
+    public static bool IsStartedByWindows(ProcessInfo process)
+    {
+        if (process.ExePath is { } path
+            && (path.Contains(@"\Windows\SystemApps", StringComparison.OrdinalIgnoreCase)
+                || path.Contains(@"\Windows\ImmersiveControlPanel", StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        if (process.CommandLine is not { } command) return false;
+        foreach (var token in command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (ActivationSwitches.Contains(token)
+                || ActivationSwitchPrefixes.Any(prefix => token.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                return true;
+        }
+        return false;
+    }
 
     /// <summary>System processes, IDEs, terminals and WSL/Docker: never stopped, and never memory-capped.</summary>
     public static bool IsProtected(string name) => ProtectedNames.Contains(name);
@@ -51,6 +84,8 @@ public static class SafetyPolicy
             return Blocked("This tree contains AgentReclaim itself.");
         if (nodes.FirstOrDefault(n => ProtectedNames.Contains(n.Process.Name)) is { } protectedNode)
             return Blocked($"{protectedNode.Process.Name} is on the protected list.");
+        if (nodes.FirstOrDefault(n => IsStartedByWindows(n.Process)) is { } windowsNode)
+            return Blocked($"{windowsNode.Process.Name} was started by Windows, not by an agent.");
         // Without a start time a PID can't be told apart from a later process that reused it, and Windows hides
         // start times only for processes AgentReclaim shouldn't touch anyway (other users', system services).
         if (nodes.FirstOrDefault(n => n.Process.StartTimeUtc == DateTime.MinValue) is { } unverifiable)

@@ -27,6 +27,15 @@ public sealed class AutoRuleEngine
     private readonly HashSet<ProcessKey> _throttled = new();
     private readonly HashSet<ProcessKey> _attemptedStops = new();
     private readonly Dictionary<ProcessKey, DateTime> _hookEndedAgents = new();
+    private HashSet<ProcessKey> _knownLeftovers = [];
+    private readonly HashSet<ProcessKey> _burst = [];
+    private int _unreportedBurst;
+
+    /// <summary>
+    /// This many new leftovers in one poll is left to a person. Normal use has shown at most 6 at any time, while the
+    /// one time attribution went wrong 174 appeared at once and automatic stopping worked through Windows' own.
+    /// </summary>
+    public const int BurstSize = 10;
 
     /// <summary>
     /// Called when the Claude Code SessionEnd hook reports that this agent instance is ending. Matched on
@@ -41,8 +50,43 @@ public sealed class AutoRuleEngine
     /// Leftovers eligible right now, best first. The caller should stop at most one per fresh snapshot:
     /// each stop takes time, and the rest of the plan goes stale meanwhile.
     /// </summary>
-    public IReadOnlyList<OrphanTree> LeftoversToStop(AnalysisResult result, AppSettings settings, int selfPid) =>
-        settings.AutoStopLeftovers ? SafeLeftovers(result, settings, selfPid, skipAttempted: true) : [];
+    public IReadOnlyList<OrphanTree> LeftoversToStop(AnalysisResult result, AppSettings settings, int selfPid)
+    {
+        NoteBurst(result);
+        if (!settings.AutoStopLeftovers) return [];
+        return SafeLeftovers(result, settings, selfPid, skipAttempted: true)
+            .Where(tree => !tree.Root.SelfAndDescendants().Any(x => _burst.Contains(x.Node.Process.Key)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// How many leftovers just appeared at once and won't be stopped automatically (null: none since last asked). They
+    /// stay listed for a person to judge, and "Free safe leftovers" still offers them.
+    /// </summary>
+    public int? TakeBurstNotice()
+    {
+        if (_unreportedBurst == 0) return null;
+        var count = _unreportedBurst;
+        _unreportedBurst = 0;
+        return count;
+    }
+
+    private void NoteBurst(AnalysisResult result)
+    {
+        var current = result.Orphans
+            .SelectMany(tree => tree.Root.SelfAndDescendants().Select(x => x.Node.Process.Key))
+            .ToHashSet();
+        var newTrees = result.Orphans.Where(tree => !_knownLeftovers.Contains(tree.Root.Process.Key)).ToList();
+        if (newTrees.Count >= BurstSize)
+        {
+            foreach (var tree in newTrees)
+            foreach (var (node, _) in tree.Root.SelfAndDescendants())
+                _burst.Add(node.Process.Key);
+            _unreportedBurst += newTrees.Count;
+        }
+        _burst.IntersectWith(current);
+        _knownLeftovers = current;
+    }
 
     /// <summary>
     /// Leftovers that pass every auto-stop check (owner seen, idle long enough, no connections, allowed by
@@ -78,6 +122,10 @@ public sealed class AutoRuleEngine
                                 && now - endedAt >= grace;
             var required = hookGraceOver ? grace : idleNeeded;
             if (nodes.Min(n => n.IdleFor) < required) continue;
+
+            // Idle isn't enough: a child that sat idle under its agent is idle the moment the agent exits, or restarts.
+            // After a hook-reported end, that end is already the start of the wait.
+            if (!hookGraceOver && tree.LeftoverFor < idleNeeded) continue;
 
             plan.Add(tree);
         }
