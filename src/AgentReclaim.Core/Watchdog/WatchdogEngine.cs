@@ -103,6 +103,9 @@ public sealed record ActivityMark(DateTime AtUtc, string Path, bool Complete = t
 public sealed record ProgressMark(string Text, DateTime AtUtc)
 {
     public bool Done => Text.Split('|')[0].Trim() == "100";
+
+    /// <summary>The step says the agent is waiting, for a person most likely: quiet then is expected, not stuck.</summary>
+    public bool Waiting => Text.Split('|', 2) is [_, var step] && step.TrimStart().StartsWith("waiting", StringComparison.OrdinalIgnoreCase);
 }
 
 public interface IWatchdogProbes
@@ -416,8 +419,8 @@ public sealed class WatchdogEngine(IWatchdogProbes probes, WatchdogMemory? memor
 
     private void CheckSession(WatchdogSettings settings, string session, List<WatchdogAlert> alerts, List<(string, string)> problems, DateTime now)
     {
-        // A session with no progress or at 100 is idle. Idle is never an alert.
-        if (probes.Progress(session) is not { Done: false } progress) return;
+        // A session with no progress, at 100, or whose step starts "Waiting" is idle or paused. That's never an alert.
+        if (probes.Progress(session) is not { Done: false, Waiting: false } progress) return;
 
         var paths = (settings.ActivityPaths ?? []).Where(p => p is not null).Select(p => p.Replace("{session}", session, StringComparison.Ordinal)).ToList();
         var newest = probes.NewestActivity(paths);

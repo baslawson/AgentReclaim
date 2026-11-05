@@ -1048,6 +1048,29 @@ public class WatchdogFindingsTests
         Assert.Contains(alerts, a => a.Kind == WatchdogAlertKind.Stale); // within RepeatMinutes of the stuck one
     }
 
+    [Theory]
+    [InlineData("40|Waiting for the user's OK")]
+    [InlineData("40| waiting on review")]
+    public void A_session_waiting_for_someone_is_paused_not_stuck(string text)
+    {
+        var probes = new FakeProbes { ProgressNow = new ProgressMark(text, T0), Activity = new ActivityMark(T0, "a") };
+        var engine = new WatchdogEngine(probes);
+        for (var minute = 0; minute <= 300; minute += 5) Assert.Empty(engine.Check(Settings(), OneSession, T0.AddMinutes(minute)));
+
+        probes.ProgressNow = new ProgressMark("45|building after the OK", T0.AddMinutes(300)); // and back at work
+        var later = new List<WatchdogAlert>();
+        for (var minute = 300; minute <= 330; minute += 5) later.AddRange(engine.Check(Settings(), OneSession, T0.AddMinutes(minute)));
+        Assert.Single(later, a => a.Kind == WatchdogAlertKind.Stuck); // quiet counts again, from the new step
+    }
+
+    [Fact]
+    public void Waiting_only_counts_at_the_start_of_the_step()
+    {
+        Assert.False(new ProgressMark("40|build done, no waiting", T0).Waiting);
+        Assert.False(new ProgressMark("waiting", T0).Waiting); // no step at all
+        Assert.True(new ProgressMark("40|WAITING", T0).Waiting);
+    }
+
     [Fact]
     public void A_session_that_just_connected_is_given_time_before_it_is_called_stuck()
     {
