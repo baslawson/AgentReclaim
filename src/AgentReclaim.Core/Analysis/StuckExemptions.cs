@@ -49,11 +49,15 @@ public static class StuckExemptions
     /// <param name="tool">The command the agent started.</param>
     /// <param name="tree">The command and everything under it.</param>
     /// <param name="now">The current snapshot's time.</param>
-    public static string? Reason(ProcessInfo tool, IReadOnlyList<ProcessNode> tree, DateTime now)
+    /// <param name="userExempt">Text the user marked as not to be judged, found anywhere in a command line.</param>
+    public static string? Reason(ProcessInfo tool, IReadOnlyList<ProcessNode> tree, DateTime now, IReadOnlyList<string>? userExempt = null)
     {
         foreach (var node in tree)
         {
             var p = node.Process;
+            if (userExempt is not null && p.CommandLine is { } line
+                && userExempt.Any(text => !string.IsNullOrWhiteSpace(text) && line.Contains(text, StringComparison.OrdinalIgnoreCase)))
+                return "the user marked it as not stuck";
             if (AgentSignatures.MightBeAgent(p)) return "another agent is working under it";
             if (RemoteWorkClients.Contains(p.Name)) return $"{p.Name} does its work elsewhere";
             if (AgentHelpers.Contains(p.Name)) return "an agent's own helper";
@@ -61,6 +65,7 @@ public static class StuckExemptions
             if (RemoteWorkCommand.IsMatch(command)) return "its work runs in a container or on another machine";
             if (AgentCommand.IsMatch(command)) return "it runs another agent";
             if (HookOrHelperCommand.IsMatch(command)) return "an agent's hook or helper";
+            if (command.Contains("/watchdog?session=", StringComparison.OrdinalIgnoreCase)) return "it's listening for the watchdog's alerts";
         }
 
         var limit = tree.Select(n => TimeLimitOf(n.Process.CommandLine)).Max();

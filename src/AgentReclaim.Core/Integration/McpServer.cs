@@ -73,7 +73,7 @@ public sealed class McpSelfScope(
 /// and then only reaches the calling agent's own processes and leftovers (see <see cref="AgentScope"/>).
 /// </summary>
 public sealed class McpServer(TextReader input, TextWriter output, Func<AnalysisResult>? analyze = null, McpSelfScope? scope = null,
-    Func<IReadOnlyList<DoctorReport>>? healthCheck = null)
+    Func<IReadOnlyList<DoctorReport>>? healthCheck = null, Func<Watchdog.WatchdogStatus?>? watchdogStatus = null)
 {
     private const string DefaultProtocolVersion = "2025-06-18";
 
@@ -175,6 +175,10 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
             "what isn't OK, with suggested fixes, and when it was checked. Covers installs, sign-in, config and MCP servers, not performance. " +
             "This doesn't run the checks: the user runs them from AgentReclaim's Health tab or tray menu.",
             new JsonObject()),
+        Tool("watchdog_status",
+            "AgentReclaim's watchdog, if the user turned it on: whether it's checking, the servers and repos it watches and how they last read, connected sessions, " +
+            "recent alerts, and the ws:// address to listen on for alerts (fill in {session} with your session id). Read-only.",
+            new JsonObject()),
     ];
 
     private static JsonObject Tool(string name, string description, JsonObject properties, bool readOnly = true, string[]? required = null)
@@ -197,9 +201,10 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
         var name = parameters?["name"]?.GetValue<string>();
         var args = parameters?["arguments"];
         if (name is not ("resource_overview" or "list_session_processes" or "list_leftovers" or "list_my_processes" or "stop_my_process"
-            or "check_agent_health"))
+            or "check_agent_health" or "watchdog_status"))
             throw new ArgumentException($"Unknown tool: {name}");
         if (name == "stop_my_process") return StopMyProcess(args);
+        if (name == "watchdog_status") return Content(JsonSerializer.Serialize(WatchdogView(), new JsonSerializerOptions { WriteIndented = true }));
         if (name == "check_agent_health") return Content(JsonSerializer.Serialize(Health(), new JsonSerializerOptions { WriteIndented = true }));
 
         var result = Analyze();
@@ -230,6 +235,26 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
             problems = r.Problems.Select(p => new { check = p.Name, status = p.Status.ToString(), fix = p.Fix }).ToList(),
             checked_at_utc = r.RanAtUtc.ToString("u"),
         }).ToList();
+    }
+
+    /// <summary>The app's saved status: this server is a separate process, and the app may not be running.</summary>
+    private object WatchdogView()
+    {
+        var status = (watchdogStatus ?? (() => Watchdog.WatchdogStatus.Load(AppPaths.WatchdogFile)))();
+        if (status is null) return new { enabled = false, note = "The watchdog has never run. The user can turn it on in AgentReclaim's settings." };
+        var now = DateTime.UtcNow;
+        return new
+        {
+            enabled = status.Enabled,
+            checking_now = status.IsCurrent(now),
+            error = status.Error,
+            last_check_utc = status.LastCheckUtc?.ToString("u"),
+            url = status.IsCurrent(now) ? status.Url : null, // otherwise no listener of ours there: whoever holds the port would get the token
+            sessions = status.Sessions,
+            servers = status.Memory.Servers,
+            repos = status.Memory.Repos,
+            recent_alerts = status.RecentAlerts.TakeLast(20).Select(a => new { kind = a.Kind.ToString(), at_utc = a.AtUtc.ToString("u"), text = a.Text }).ToList(),
+        };
     }
 
     private static JsonObject Content(string text, bool isError = false)

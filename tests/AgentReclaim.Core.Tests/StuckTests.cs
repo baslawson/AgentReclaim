@@ -24,6 +24,45 @@ public class StuckTests
     }
 
     [Fact]
+    public void A_null_or_blank_entry_in_the_users_list_is_skipped_not_fatal()
+    {
+        var analyzer = new Analyzer(new LineageStore(), new AnalyzerOptions { CoreCount = 4, StuckExemptCommands = [null!, " ", "my_soak"] });
+        ProcessInfo[] Tree(int _) =>
+        [
+            Proc(10, 1, "claude.exe", startMinute: 0, cpu: 1),
+            Proc(11, 10, "bash.exe", startMinute: 5),
+            Proc(12, 11, "python.exe", "python other.py", startMinute: 5),
+        ];
+        Assert.NotEmpty(Run(analyzer, 5, 30, Tree).Stuck);
+    }
+
+    [Fact]
+    public void An_agents_watchdog_listener_waits_by_design_and_is_never_judged_stuck()
+    {
+        var analyzer = new Analyzer(new LineageStore(), new AnalyzerOptions { CoreCount = 4 });
+        ProcessInfo[] Tree(int _) =>
+        [
+            Proc(10, 1, "claude.exe", startMinute: 0, cpu: 1),
+            Proc(11, 10, "bash.exe", startMinute: 5),
+            Proc(12, 11, "websocat.exe", "websocat \"ws://127.0.0.1:47615/watchdog?session=abc&token=t\"", startMinute: 5),
+        ];
+        Assert.Empty(Run(analyzer, 5, 30, Tree).Stuck);
+    }
+
+    [Fact]
+    public void A_command_the_user_listed_is_never_judged_stuck()
+    {
+        var analyzer = new Analyzer(new LineageStore(), new AnalyzerOptions { CoreCount = 4, StuckExemptCommands = ["my_soak"] });
+        ProcessInfo[] Tree(int _) =>
+        [
+            Proc(10, 1, "claude.exe", startMinute: 0, cpu: 1),
+            Proc(11, 10, "bash.exe", startMinute: 5),
+            Proc(12, 11, "python.exe", "python My_Soak.py", startMinute: 5),
+        ];
+        Assert.Empty(Run(analyzer, 5, 30, Tree).Stuck);
+    }
+
+    [Fact]
     public void A_command_with_no_activity_for_ten_minutes_may_be_stuck()
     {
         var analyzer = NewAnalyzer();

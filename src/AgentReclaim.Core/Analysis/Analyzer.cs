@@ -38,6 +38,9 @@ public sealed record AnalyzerOptions
     /// <summary>A process in a session that's kept a whole CPU core busy this long may be stuck in a loop (null: don't look).</summary>
     public TimeSpan? StuckSpinningAfter { get; init; } = TimeSpan.FromMinutes(15);
 
+    /// <summary>Text in a command line that means it's never judged stuck (the user's own list).</summary>
+    public IReadOnlyList<string> StuckExemptCommands { get; init; } = [];
+
     /// <summary>Share of one core that counts as "a whole core".</summary>
     public double SpinningCorePercent { get; init; } = 90;
 
@@ -371,7 +374,7 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
                     || p.StartTimeUtc - agent.Process.StartTimeUtc < _options.AgentStartupGrace) continue;
                 if (tree.Any(n => n.Process.ListeningPorts.Count > 0 || n.Process.UdpPorts.Count > 0)) continue; // a server: idle between requests by design
                 var idle = now - active;
-                if (idle >= waitAfter && stuck.All(s => s.Node != tool) && StuckExemptions.Reason(p, tree, now) is null)
+                if (idle >= waitAfter && stuck.All(s => s.Node != tool) && StuckExemptions.Reason(p, tree, now, _options.StuckExemptCommands) is null)
                     stuck.Add(new StuckProcess(session, tool, StuckKind.Waiting, idle));
             }
         }
@@ -384,11 +387,11 @@ public sealed class Analyzer(LineageStore lineage, AnalyzerOptions? options = nu
     /// Busy inside a command that's limited itself or that isn't ours to judge, by the same rules as waiting. An agent
     /// itself is always reported (and never stopped, whatever this says).
     /// </summary>
-    private static bool ExemptFromSpinning(AgentSession session, ProcessNode node, DateTime now)
+    private bool ExemptFromSpinning(AgentSession session, ProcessNode node, DateTime now)
     {
         if (AgentSignatures.AgentRootKind(node.Process) is not null) return false;
         if (!FindTool(session.Root, node, null, out var tool) || tool is null) return false;
-        return StuckExemptions.Reason(tool.Process, tool.SelfAndDescendants().Select(x => x.Node).ToList(), now) is not null;
+        return StuckExemptions.Reason(tool.Process, tool.SelfAndDescendants().Select(x => x.Node).ToList(), now, _options.StuckExemptCommands) is not null;
     }
 
     /// <summary>Finds the command the nearest agent above <paramref name="target"/> started, which may be the target itself.</summary>

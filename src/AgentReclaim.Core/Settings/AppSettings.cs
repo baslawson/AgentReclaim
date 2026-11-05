@@ -70,6 +70,27 @@ public sealed class AppSettings
     public bool CapSessionMemory { get; set; }
     public int SessionMemoryCapGb { get; set; } = 8;
 
+    /// <summary>
+    /// Text that marks a command as not to be judged stuck: no notice, and never stopped by the stuck rules.
+    /// Compared with each command line under it, ignoring case.
+    /// </summary>
+    public List<string> StuckExemptCommands { get; set; } = [];
+
+    /// <summary>Opt-in: tell agents about stuck work and changes to repos and servers, and the user about servers and problems.</summary>
+    public Watchdog.WatchdogSettings Watchdog { get; set; } = new();
+
+    /// <summary>Why the file couldn't be read, when it couldn't and these are the defaults. Not saved.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? LoadError { get; private set; }
+
+    /// <summary>The unreadable file has a watchdog section: someone may be setting it up by hand. Not saved.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool LoadErrorMentionsWatchdog { get; private set; }
+
+    /// <summary>Keys that aren't settings, such as a misspelt one: kept on save rather than dropped.</summary>
+    [System.Text.Json.Serialization.JsonExtensionData]
+    public Dictionary<string, JsonElement>? Unknown { get; set; }
+
     // Appearance
     public ThemePreference Theme { get; set; } = ThemePreference.System;
 
@@ -89,11 +110,17 @@ public sealed class AppSettings
         try
         {
             if (File.Exists(path))
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), JsonOptions) ?? new AppSettings();
+            {
+                var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), JsonOptions) ?? new AppSettings();
+                loaded.Watchdog ??= new(); // "Watchdog": null
+                return loaded;
+            }
         }
         catch (Exception ex) when (ex is IOException or JsonException)
         {
             // Fall back to defaults; the broken file is overwritten on the next save.
+            KeepUnreadable(path);
+            return new AppSettings { LoadError = ex.Message, LoadErrorMentionsWatchdog = Mentions(path, "watchdog") };
         }
         return new AppSettings();
     }
@@ -106,7 +133,45 @@ public sealed class AppSettings
         File.Move(temp, path, overwrite: true);
     }
 
-    public AppSettings Clone() => JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(this, JsonOptions), JsonOptions)!;
+    /// <summary>The app has written a good file over the one it couldn't read.</summary>
+    public void ForgetLoadError()
+    {
+        LoadError = null;
+        LoadErrorMentionsWatchdog = false;
+    }
+
+    /// <summary>The next save writes the defaults over it, and what was in it may be a lot of hand-written settings.</summary>
+    private static void KeepUnreadable(string path)
+    {
+        try
+        {
+            File.Copy(path, path + ".unreadable", overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static bool Mentions(string path, string word)
+    {
+        try
+        {
+            return File.ReadAllText(path).Contains(word, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A copy. Carries <see cref="LoadError"/>, which isn't saved, so whoever is handed the copy still knows.</summary>
+    public AppSettings Clone()
+    {
+        var copy = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(this, JsonOptions), JsonOptions)!;
+        copy.LoadError = LoadError;
+        copy.LoadErrorMentionsWatchdog = LoadErrorMentionsWatchdog;
+        return copy;
+    }
 }
 
 /// <summary>Window theme. System follows the Windows "app mode" setting, live.</summary>

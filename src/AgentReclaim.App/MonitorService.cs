@@ -87,6 +87,9 @@ public sealed class MonitorService(
     /// <summary>A process in a session may be stuck (only when that notification is turned on). Raised on the background thread.</summary>
     public event Action<StuckNotice>? StuckFound;
 
+    /// <summary>What may be stuck right now, on every poll, whatever the notification setting. Raised on the background thread.</summary>
+    public event Action<IReadOnlyList<StuckProcess>>? StuckSeen;
+
     /// <summary>A new history sample was taken. Raised on the background thread.</summary>
     public event Action? HistoryUpdated;
 
@@ -168,12 +171,14 @@ public sealed class MonitorService(
             StuckWaitingAfter = TimeSpan.FromMinutes(Math.Max(1, current.StuckWaitingMinutes)),
             StuckSpinningAfter = TimeSpan.FromMinutes(Math.Max(1, current.StuckSpinningMinutes)),
             UnobservedGapAfter = TimeSpan.FromMinutes(1), // far longer than a poll: the PC slept, or monitoring was paused
+            StuckExemptCommands = current.StuckExemptCommands,
         };
 
         while (_sessionEnds.TryDequeue(out var ended))
             rules.MarkSessionEnded(new ProcessKey(ended.AgentPid, ended.AgentStartTicks), DateTime.UtcNow);
 
         var result = analyzer.Analyze(collector.Collect());
+        StuckSeen?.Invoke(result.Stuck);
         _nextWait = PollSchedule.Next(WindowVisible, result, !_freeRequested.IsEmpty);
         _projects.Retain(result.Snapshot.Processes.Select(p => p.Key));
         var projects = Insights.Projects(result, _projects.ProjectOf);

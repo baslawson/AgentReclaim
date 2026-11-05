@@ -17,6 +17,7 @@ public partial class App : Application
 {
     private Mutex? _singleInstance;
     private MonitorService? _monitor;
+    private Core.Watchdog.WatchdogService? _watchdog;
     private UpdateService? _updates;
     private TrayIcon? _tray;
     private MainWindow? _window;
@@ -30,9 +31,37 @@ public partial class App : Application
 
     public static bool IsExiting { get; private set; }
 
+    private bool _watchingStopped;
+
+    /// <summary>Once only: on quitting, or when Windows ends the session, which skips <see cref="ExitApp"/>.</summary>
+    private void StopWatching()
+    {
+        if (_watchingStopped) return;
+        _watchingStopped = true;
+        Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        _monitor?.Dispose(); // first: a stuck command noted during the watchdog's last save would be saved as told, never told
+        _watchdog?.Dispose(); // its last save: alerts handed out since the previous one aren't sent again after a reboot
+    }
+
+    // Not on SessionEnding: that only asks, and a cancelled shutdown leaves this app running. If nothing cancels, WPF
+    // shuts the app down there and then, before Windows says the session has ended, so Exit is the one place that's
+    // reached on every way out.
+    // A wait doesn't count sleep, so the next round could be minutes off, with watchdog_status calling it stopped.
+    private void OnPowerModeChanged(object? sender, Microsoft.Win32.PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == Microsoft.Win32.PowerModes.Resume) _watchdog?.SettingsChanged();
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        StopWatching();
+        base.OnExit(e);
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
         var settings = AppSettings.Load(AppPaths.SettingsFile);
         Log.Initialize();
@@ -145,6 +174,17 @@ public partial class App : Application
             if (action.Notify)
                 _tray.ShowMessage(action.Success ? "AgentReclaim" : "AgentReclaim: action failed", action.Message, !action.Success);
         });
+        _watchdog = new Core.Watchdog.WatchdogService(() => Volatile.Read(ref _published), AppPaths.WatchdogFile,
+            alert => Dispatcher.BeginInvoke(() =>
+            {
+                var text = alert.Text.Replace("WATCHDOG: ", "");
+                viewModel.AddActivity(text);
+                // A notification is cut short at 255 characters, so what it is now comes first.
+                var lines = text.Split('\n');
+                _tray.ShowMessage("AgentReclaim watchdog", lines.Length > 1 ? $"{lines[^1]}\n{lines[0]}" : text, isError: true);
+            }));
+        _monitor.StuckSeen += _watchdog.NoteStuck;
+        _watchdog.Start();
         _monitor.Start();
 
         _updates.Changed += () => Dispatcher.BeginInvoke(settingsViewModel.RefreshUpdateStatus);
@@ -335,6 +375,7 @@ public partial class App : Application
         if (settings.Theme != Volatile.Read(ref _published).Theme) ThemeManager.Apply(settings.Theme);
         Volatile.Write(ref _published, settings);
         _monitor?.SettingsChanged(settings);
+        _watchdog?.SettingsChanged();
     }
 
     private void ShowWindow()
@@ -350,7 +391,7 @@ public partial class App : Application
         Log.Info("AgentReclaim exiting.");
         IsExiting = true;
         _pipeStop.Cancel();
-        _monitor?.Dispose();
+        StopWatching();
         _updates?.Dispose();
         _tray?.Dispose();
         _window?.Close();

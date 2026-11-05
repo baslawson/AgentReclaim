@@ -24,6 +24,7 @@ public static class AppPaths
     public static string HistoryFile => Path.Combine(DataDirectory, "history.json");
     public static string ReclaimTallyFile => Path.Combine(DataDirectory, "reclaimed.json");
     public static string HealthFile => Path.Combine(DataDirectory, "health.json");
+    public static string WatchdogFile => Path.Combine(DataDirectory, "watchdog.json");
 
     /// <summary>
     /// Empty normally. With AGENTRECLAIM_DATA_DIR set, a suffix derived from it, so an isolated test

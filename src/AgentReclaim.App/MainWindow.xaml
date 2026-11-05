@@ -760,6 +760,9 @@
                         <CheckBox Content="Tell me when an agent leaves something running" IsChecked="{Binding NotifyNewLeftovers}" />
                         <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
                                    Text="For example &quot;Claude Code left node.exe running on port 5173 (shop)&quot;. Only processes that were seen under an agent, once they've outlived it for a few seconds. It doesn't stop anything." />
+                        <CheckBox Content="Watchdog: tell agents about stuck work and changes to repos and servers" IsChecked="{Binding WatchdogEnabled}" />
+                        <TextBlock Style="{StaticResource StatLabel}" TextWrapping="Wrap" Margin="20,0,0,0"
+                                   Text="It only reads. What it watches is under Watchdog in settings.json, and agents listen through the MCP tool watchdog_status. You get a notification for a server change (unless that server's Notify is off) and for anything it can't watch, so you see those with no agent open." />
                         <CheckBox Content="Tell me when something in a session may be stuck" IsChecked="{Binding NotifyStuck}" />
                         <StackPanel Orientation="Horizontal" Margin="20,4,0,0">
                             <TextBlock Text="A command an agent started, with no activity for" VerticalAlignment="Center" />

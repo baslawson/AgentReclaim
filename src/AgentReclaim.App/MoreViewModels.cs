@@ -179,6 +179,7 @@ public sealed class SettingsViewModel(AppSettings settings, Action<AppSettings> 
     public bool AllowAgentSelfStop { get => settings.AllowAgentSelfStop; set => Set(() => settings.AllowAgentSelfStop = value); }
     public bool NotifyNewLeftovers { get => settings.NotifyNewLeftovers; set => Set(() => settings.NotifyNewLeftovers = value); }
     public bool NotifyStuck { get => settings.NotifyStuck; set => Set(() => settings.NotifyStuck = value); }
+    public bool WatchdogEnabled { get => settings.Watchdog.Enabled; set => Set(() => settings.Watchdog.Enabled = value); }
     public bool AutoStopStuckWaiting { get => settings.AutoStopStuckWaiting; set => Set(() => settings.AutoStopStuckWaiting = value); }
     public bool AutoStopStuckSpinning { get => settings.AutoStopStuckSpinning; set => Set(() => settings.AutoStopStuckSpinning = value); }
     public int StuckWaitingMinutes { get => settings.StuckWaitingMinutes; set => Set(() => settings.StuckWaitingMinutes = Math.Clamp(value, 2, 240)); }
@@ -240,6 +241,7 @@ public sealed class SettingsViewModel(AppSettings settings, Action<AppSettings> 
     private void Set(Action apply, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
     {
         apply();
+        settings.ForgetLoadError(); // publishing saves the file, so it's readable from here on
         publish(settings.Clone());
         Raise(name);
     }

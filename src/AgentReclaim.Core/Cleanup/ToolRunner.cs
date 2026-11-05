@@ -69,6 +69,47 @@ public static class ToolRunner
         }
     }
 
+    /// <summary>
+    /// Runs a tool with its arguments passed separately, so Windows' quoting rules can't change what they mean. Its stdin
+    /// is closed, so one that would ask a question gets an answer at once.
+    /// </summary>
+    public static ToolResult Run(string file, IReadOnlyList<string> arguments, TimeSpan timeout, IReadOnlyDictionary<string, string>? environment = null)
+    {
+        var start = new ProcessStartInfo(file)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        foreach (var argument in arguments) start.ArgumentList.Add(argument);
+        if (environment is not null)
+            foreach (var (key, value) in environment) start.Environment[key] = value;
+
+        try
+        {
+            using var process = Process.Start(start)!;
+            process.StandardInput.Close();
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(timeout))
+            {
+                process.Kill(entireProcessTree: true); // our own child, started just now
+                return new ToolResult(false, -1, $"{file} timed out after {timeout.TotalSeconds:0}s");
+            }
+            if (!Task.WaitAll([stdout, stderr], OutputGrace))
+                return new ToolResult(false, process.ExitCode, $"{file} exited, but its output was still open after {OutputGrace.TotalSeconds:0}s");
+            return new ToolResult(process.ExitCode == 0, process.ExitCode, process.ExitCode == 0 ? stdout.Result.Trim() : (stdout.Result + stderr.Result).Trim());
+        }
+        catch (Win32Exception ex)
+        {
+            return new ToolResult(false, -1, ex.Message);
+        }
+    }
+
     /// <summary>Full path of a tool on PATH (including .cmd shims such as npm.cmd), or null.</summary>
     public static string? Find(string name)
     {
