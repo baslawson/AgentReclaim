@@ -20,7 +20,8 @@ switch (args)
         }
         using var term = PosixSignalRegistration.Create(PosixSignal.SIGTERM, Stop);
         using var interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, Stop);
-        return WatchdogHost.Run(AppPaths.SettingsFile, AppPaths.WatchdogFile, Console.Out, stop.Token);
+        return WatchdogHost.Run(AppPaths.SettingsFile, AppPaths.WatchdogFile, Console.Out, stop.Token,
+            level => Log.MinimumLevel = level);
     }
     case ["mcp"]:
     {

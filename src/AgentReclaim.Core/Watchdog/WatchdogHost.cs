@@ -1,3 +1,4 @@
+using AgentReclaim.Core.Diagnostics;
 using AgentReclaim.Core.Settings;
 
 namespace AgentReclaim.Core.Watchdog;
@@ -17,7 +18,9 @@ public static class WatchdogHost
     /// (two would fight over the port and the file).
     /// </summary>
     /// <param name="output">Problems and alerts meant for the user (the service's journal), one line each.</param>
-    public static int Run(string settingsFile, string statusFile, TextWriter output, CancellationToken stop)
+    /// <param name="logLevel">Given settings.json's LogLevel each time the settings are read, so "Debug" applies without a
+    /// restart. Null: the log level is left alone (tests, which share the static log).</param>
+    public static int Run(string settingsFile, string statusFile, TextWriter output, CancellationToken stop, Action<LogLevel>? logLevel = null)
     {
         var dataFolder = Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(statusFile))!);
         // watchdog.json holds the socket's token. %LOCALAPPDATA% is private on Windows; on Linux the folder would be made
@@ -38,7 +41,12 @@ public static class WatchdogHost
 
         using (held)
         {
-            using var service = new WatchdogService(() => AppSettings.Load(settingsFile), statusFile,
+            using var service = new WatchdogService(() =>
+                {
+                    var settings = AppSettings.Load(settingsFile);
+                    logLevel?.Invoke(settings.LogLevel);
+                    return settings;
+                }, statusFile,
                 alert => Say(output, alert.Text.ReplaceLineEndings(" | ")));
             // An edit applies at once, as in the app, rather than at the next round, which can be minutes away.
             using var watcher = new FileSystemWatcher(settingsFolder, Path.GetFileName(settingsFile))

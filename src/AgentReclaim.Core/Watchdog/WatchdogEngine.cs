@@ -420,13 +420,21 @@ public sealed class WatchdogEngine(IWatchdogProbes probes, WatchdogMemory? memor
     private void CheckSession(WatchdogSettings settings, string session, List<WatchdogAlert> alerts, List<(string, string)> problems, DateTime now)
     {
         // A session with no progress, at 100, or whose step starts "Waiting" is idle or paused. That's never an alert.
-        if (probes.Progress(session) is not { Done: false, Waiting: false } progress) return;
+        var mark = probes.Progress(session);
+        if (mark is not { Done: false, Waiting: false } progress)
+        {
+            Trace(() => mark is { } idle
+                ? $"session {session}: not judged, {(idle.Done ? "done" : "waiting")} (progress: {idle.Text.ReplaceLineEndings(" ")})"
+                : $"session {session}: not judged, no progress file");
+            return;
+        }
 
         var paths = (settings.ActivityPaths ?? []).Where(p => p is not null).Select(p => p.Replace("{session}", session, StringComparison.Ordinal)).ToList();
         var newest = probes.NewestActivity(paths);
         _judgedAny = true;
         if (newest is { Complete: false })
         {
+            Trace(() => $"session {session}: not judged, too many files in the activity folders");
             // One problem for the folders, however many sessions look at them.
             var folders = string.Join(", ", settings.ActivityPaths ?? []);
             problems.Add(($"toomany {folders}",
@@ -442,21 +450,45 @@ public sealed class WatchdogEngine(IWatchdogProbes probes, WatchdogMemory? memor
         var repeat = TimeSpan.FromMinutes(Math.Max(1, settings.RepeatMinutes));
         var progressKey = $"{progress.AtUtc:O} {progress.Text}";
 
-        if (quiet >= TimeSpan.FromMinutes(Math.Max(1, settings.QuietMinutes)))
+        var quietLimit = Math.Max(1, settings.QuietMinutes);
+        var unchanged = now - (progress.AtUtc < seenFrom ? seenFrom : progress.AtUtc);
+        var staleLimit = Math.Max(1, settings.ProgressStaleMinutes);
+        // Why an alert did or didn't come: the question when one was expected and none arrived.
+        string Measured() => $"quiet {(int)quiet.TotalMinutes} of {quietLimit} min, progress unchanged {(int)unchanged.TotalMinutes} of {staleLimit} min, newest file {newest?.Path ?? "none"} (progress: {progress.Text.ReplaceLineEndings(" ")})";
+
+        if (quiet >= TimeSpan.FromMinutes(quietLimit))
         {
-            if (FreshAlert(session, WatchdogAlertKind.Stuck, progressKey, now, repeat))
+            var fresh = FreshAlert(session, WatchdogAlertKind.Stuck, progressKey, now, repeat);
+            if (fresh)
                 alerts.Add(new WatchdogAlert(WatchdogAlertKind.Stuck,
                     $"WATCHDOG: STUCK, nothing has changed for {(int)quiet.TotalMinutes} minutes\nprogress: {progress.Text}\nlast file: {newest?.Path ?? "none"}",
                     session, now, false));
+            Trace(() => $"session {session}: {(fresh ? "STUCK alert" : "stuck, already told")}; {Measured()}");
             return; // not stale as well: stale means files are moving
         }
 
-        var unchanged = now - (progress.AtUtc < seenFrom ? seenFrom : progress.AtUtc);
-        if (unchanged >= TimeSpan.FromMinutes(Math.Max(1, settings.ProgressStaleMinutes))
-            && FreshAlert(session, WatchdogAlertKind.Stale, progressKey, now, repeat))
-            alerts.Add(new WatchdogAlert(WatchdogAlertKind.Stale,
-                $"WATCHDOG: STALE, progress unchanged for {(int)unchanged.TotalMinutes} minutes while files move\nprogress: {progress.Text}\nlast file: {newest?.Path ?? "none"}",
-                session, now, false));
+        if (unchanged >= TimeSpan.FromMinutes(staleLimit))
+        {
+            var fresh = FreshAlert(session, WatchdogAlertKind.Stale, progressKey, now, repeat);
+            if (fresh)
+                alerts.Add(new WatchdogAlert(WatchdogAlertKind.Stale,
+                    $"WATCHDOG: STALE, progress unchanged for {(int)unchanged.TotalMinutes} minutes while files move\nprogress: {progress.Text}\nlast file: {newest?.Path ?? "none"}",
+                    session, now, false));
+            Trace(() => $"session {session}: {(fresh ? "STALE alert" : "stale, already told")}; {Measured()}");
+            return;
+        }
+
+        Trace(() => $"session {session}: fine; {Measured()}");
+    }
+
+    /// <summary>For tests: receives every trace line, whatever the log level.</summary>
+    internal Action<string>? TraceTo { get; set; }
+
+    /// <summary>A Debug line, only built when it will be written: these come every round for every session.</summary>
+    private void Trace(Func<string> message)
+    {
+        if (TraceTo is { } to) to(message());
+        else if (Log.IsEnabled(LogLevel.Debug)) Log.Debug($"Watchdog: {message()}");
     }
 
     /// <summary>Each kind keeps its own record, so stuck and stale taking turns don't reset each other's wait.</summary>
