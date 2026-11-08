@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The watchdog on a Linux machine: `agentreclaim-watchdog run` (a systemd user service, see build/linux) and
+    `agentreclaim-watchdog mcp` (offers watchdog_status only). It builds the Core sources for plain net9.0, so the
+    Windows projects stay as they are; Core's Windows-only code is compiled in but never called (hence CA1416 off).
+    Publish: dotnet publish src/AgentReclaim.Watchdog.Linux -c Release -r linux-x64 (self-contained single file).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>agentreclaim-watchdog</AssemblyName>
+    <RootNamespace>AgentReclaim.Watchdog.Linux</RootNamespace>
+    <!-- Kept the same as AgentReclaim.App's: the MCP server reports it. -->
+    <Version>0.8.0</Version>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
+    <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\AgentReclaim.Core\**\*.cs" Exclude="..\AgentReclaim.Core\bin\**;..\AgentReclaim.Core\obj\**" LinkBase="Core" />
+  </ItemGroup>
+
+</Project>

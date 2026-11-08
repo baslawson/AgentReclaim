@@ -72,8 +72,11 @@ public sealed class McpSelfScope(
 /// resources. Everything is read-only except stop_my_process, which is off until the user turns it on
 /// and then only reaches the calling agent's own processes and leftovers (see <see cref="AgentScope"/>).
 /// </summary>
+/// <param name="onlyTools">Null: every tool. Otherwise only these are listed and can be called, such as on Linux, where
+/// the process tools can't work and only watchdog_status is offered.</param>
 public sealed class McpServer(TextReader input, TextWriter output, Func<AnalysisResult>? analyze = null, McpSelfScope? scope = null,
-    Func<IReadOnlyList<DoctorReport>>? healthCheck = null, Func<Watchdog.WatchdogStatus?>? watchdogStatus = null)
+    Func<IReadOnlyList<DoctorReport>>? healthCheck = null, Func<Watchdog.WatchdogStatus?>? watchdogStatus = null,
+    IReadOnlySet<string>? onlyTools = null)
 {
     private const string DefaultProtocolVersion = "2025-06-18";
 
@@ -132,7 +135,7 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
                         ["serverInfo"] = new JsonObject { ["name"] = "agentreclaim", ["version"] = AppInfo.Version.ToString() },
                     }),
                     "ping" => Result(id, new JsonObject()),
-                    "tools/list" => Result(id, new JsonObject { ["tools"] = Tools() }),
+                    "tools/list" => Result(id, new JsonObject { ["tools"] = ListedTools() }),
                     "tools/call" => Result(id, Call(obj["params"])),
                     _ => Error(id, -32601, $"Method not found: {method}"),
                 });
@@ -150,6 +153,13 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
 
     private static string? Text(JsonNode? node) =>
         node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    private JsonArray ListedTools()
+    {
+        var tools = Tools();
+        if (onlyTools is null) return tools;
+        return new JsonArray(tools.Where(t => t?["name"]?.GetValue<string>() is { } name && onlyTools.Contains(name)).Select(t => t!.DeepClone()).ToArray());
+    }
 
     private static JsonArray Tools() =>
     [
@@ -203,6 +213,7 @@ public sealed class McpServer(TextReader input, TextWriter output, Func<Analysis
         if (name is not ("resource_overview" or "list_session_processes" or "list_leftovers" or "list_my_processes" or "stop_my_process"
             or "check_agent_health" or "watchdog_status"))
             throw new ArgumentException($"Unknown tool: {name}");
+        if (onlyTools is not null && !onlyTools.Contains(name)) throw new ArgumentException($"Unknown tool: {name}");
         if (name == "stop_my_process") return StopMyProcess(args);
         if (name == "watchdog_status") return Content(JsonSerializer.Serialize(WatchdogView(), new JsonSerializerOptions { WriteIndented = true }));
         if (name == "check_agent_health") return Content(JsonSerializer.Serialize(Health(), new JsonSerializerOptions { WriteIndented = true }));

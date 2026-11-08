@@ -1,0 +1,20 @@
+# systemd user service for the Linux watchdog. Install:
+#   install -Dm755 agentreclaim-watchdog ~/.local/bin/agentreclaim-watchdog
+#   install -Dm644 agentreclaim-watchdog.service ~/.config/systemd/user/agentreclaim-watchdog.service
+#   sudo loginctl enable-linger "$USER"     # runs from boot, with nobody logged in
+#   systemctl --user daemon-reload && systemctl --user enable --now agentreclaim-watchdog
+# Settings: ~/.local/share/AgentReclaim/settings.json, a "Watchdog" section as on Windows. Alerts and problems: journalctl --user -u agentreclaim-watchdog
+[Unit]
+Description=AgentReclaim watchdog (alerts for agent sessions, repos and servers)
+
+[Service]
+ExecStart=%h/.local/bin/agentreclaim-watchdog run
+Restart=on-failure
+RestartSec=10
+# Exit 1: another one is already running. Restarting would only repeat that every 10 seconds.
+RestartPreventExitStatus=1
+# The service closes on SIGTERM, saving what it knows; that takes a few seconds at most.
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
